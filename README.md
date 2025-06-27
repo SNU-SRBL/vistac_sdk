@@ -8,13 +8,13 @@ Authors:
 
 ## Support System
 * Tested on Ubuntu 22.04
-* Tested on GelSight Mini and Digit
+* Tested on Digit
 * Python >= 3.9
 
 ## Installation
-Clone and install gs_sdk from source:
+Clone and install vistac_sdk from source:
 ```bash
-git clone git@github.com:SNU-SRBL/gs_sdk.git
+git clone git@github.com:SNU-SRBL/vistac_sdk.git
 cd vistac_sdk
 pip install -e .
 ```
