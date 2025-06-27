@@ -161,3 +161,11 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# Datasets
+#  Datasets are often large and can be stored in a separate location or managed with a
+#  data management tool.  If you want to ignore datasets in your project, uncomment the
+#  following line.  Otherwise, you can manage datasets with a data management tool or
+#  store them in a separate location.
+sensors/D21273/calibration
+sensors/D21275/calibration

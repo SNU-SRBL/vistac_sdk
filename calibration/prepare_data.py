@@ -4,10 +4,10 @@ import os
 
 import cv2
 import numpy as np
-import yaml
 
 from calibration.utils import load_csv_as_dict
-from gs_sdk.gs_reconstruct import image2bgrxys
+from vistac_sdk.vistac_reconstruct import image2bgrxys
+from vistac_sdk.utils import load_config
 
 """
 This script prepares dataset for the tactile sensor calibration.
@@ -18,18 +18,16 @@ Prerequisite:
     - Collected tactile images are labeled.
 
 Usage:
-    python prepare_data.py --calib_dir CALIB_DIR [--config_path CONFIG_PATH] [--radius_reduction RADIUS_REDUCTION]
+    python prepare_data.py --serial SERIAL [--sensors_root SENSORS_ROOT] [--radius_reduction RADIUS_REDUCTION]
 
 Arguments:
-    --calib_dir: Path to the directory where the collected data will be saved
-    --config_path: (Optional) Path to the configuration file about the sensor dimensions.
-                   If not provided, GelSight Mini is assumed.
+    --serial: Sensor serial number (directory name under sensors/)
+    --sensors_root: (Optional) Root directory for sensors/<serial>/ (default: gs_sdk/sensors)
     --radius_reduction: (Optional) Reduce the radius of the labeled circle. This helps guarantee all labeled pixels are indented.
                         If not provided, 4 pixels will be reduced.
 """
 
-config_dir = os.path.join(os.path.dirname(__file__), "../examples/configs")
-
+DEFAULT_SENSORS_ROOT = os.path.join(os.path.dirname(__file__), "../sensors")
 
 def prepare_data():
     # Argument Parsers
@@ -37,29 +35,31 @@ def prepare_data():
         description="Use the labeled collected data to prepare the dataset files (npz)."
     )
     parser.add_argument(
-        "-b",
-        "--calib_dir",
+        "--serial",
         type=str,
-        help="path of the calibration data",
+        required=True,
+        help="sensor serial number (directory name under sensors/)",
     )
     parser.add_argument(
-        "-c",
-        "--config_path",
+        "--sensors_root",
         type=str,
-        help="path of configuring gelsight",
-        default=os.path.join(config_dir, "gsmini.yaml"),
+        default=DEFAULT_SENSORS_ROOT,
+        help="root directory containing sensors/<serial>/",
     )
     parser.add_argument(
-        "-r",
         "--radius_reduction",
         type=float,
-        help="reduce the radius of the labeled circle. When not considering shadows, this helps guarantee all labeled pixels are indented. ",
+        help="reduce the radius of the labeled circle. When not considering shadows, this helps guarantee all labeled pixels are indented.",
         default=4.0,
     )
     args = parser.parse_args()
 
+    # Set up paths
+    sensor_dir = os.path.join(args.sensors_root, args.serial)
+    config_path = os.path.join(sensor_dir, f"{args.serial}.yaml")
+    calib_dir = os.path.join(sensor_dir, "calibration")
+
     # Load the data_dict
-    calib_dir = args.calib_dir
     catalog_path = os.path.join(calib_dir, "catalog.csv")
     data_dict = load_csv_as_dict(catalog_path)
     diameters = np.array([float(diameter) for diameter in data_dict["diameter(mm)"]])
@@ -77,10 +77,8 @@ def prepare_data():
         json.dump(dict_to_save, f, indent=4)
 
     # Read the configuration
-    config_path = args.config_path
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-        ppmm = config["ppmm"]
+    config = load_config(config_path=config_path)
+    ppmm = config["ppmm"]
 
     # Extract the pixel data from each tactile image and calculate the gradients
     for experiment_reldir, diameter in zip(experiment_reldirs, diameters):
@@ -102,7 +100,7 @@ def prepare_data():
         mask = dists < radius
 
         # Find the gradient angles, prepare the data, and save the data
-        ball_radius = diameter / ppmm / 2.0
+        ball_radius = diameter * ppmm / 2.0
         if ball_radius < radius:
             print(experiment_reldir)
             print("Press too deep, deeper than the ball radius")

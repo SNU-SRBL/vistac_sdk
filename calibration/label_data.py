@@ -10,6 +10,7 @@ from nanogui import glfw
 import yaml
 
 from calibration.utils import load_csv_as_dict
+from vistac_sdk.utils import load_config
 
 """
 Rewrite from Zilin Si's code: https://github.com/Robo-Touch/Taxim
@@ -29,29 +30,45 @@ Instruction:
     4. Repeat step 3 for all the tactile images and close Nanogui when done.
 
 Usage:
-    python label_data.py --calib_dir CALIB_DIR [--config_path CONFIG_PATH] [--display_difference] [--detect_circle]
+    python label_data.py --serial SERIAL [--sensors_root SENSORS_ROOT] [--display_difference] [--detect_circle]
 
 Arguments:
-    --calib_dir: Path to the directory where the collected data are saved
-    --config_path: (Optional) Path to the configuration file about the sensor dimensions.
-                   If not provided, GelSight Mini is assumed.
+    --serial: Sensor serial number (directory name under sensors/)
+    --sensors_root: (Optional) Root directory for sensors/<serial>/ (default: gs_sdk/sensors)
     --display_difference: (Store True) Display the difference between the background image.
     --detect_circle: (Store True) Automatically detect the circle in the image.
 """
 
-config_dir = os.path.join(os.path.dirname(__file__), "../examples/configs")
-
+DEFAULT_SENSORS_ROOT = os.path.join(os.path.dirname(__file__), "../sensors")
 
 class Circle:
     """the circle drawed on the tactile image to get the contact size"""
 
     color_circle = (128, 0, 0)
     opacity = 0.5
+    dotted = True  # Add a flag for dotted outline
 
     def __init__(self, x, y, radius=25, increments=2):
         self.center = [x, y]
         self.radius = radius
         self.increments = increments
+    
+    def draw_on(self, img):
+        """Draw a no-fill, dotted outline circle on the image using pixel dots."""
+        center = (int(self.center[0]), int(self.center[1]))
+        radius = int(self.radius)
+        color = self.color_circle
+        num_dots = 10  # Increase for smoother circle
+
+        for i in range(num_dots):
+            angle = 2 * np.pi * i / num_dots
+            pt = (
+                int(center[0] + radius * np.cos(angle)),
+                int(center[1] + radius * np.sin(angle)),
+            )
+            cv2.circle(img, pt, 1, color, -1)  # radius=1 for a visible pixel dot
+
+        return img
 
 
 class CalibrateApp(ng.Screen):
@@ -115,6 +132,9 @@ class CalibrateApp(ng.Screen):
         b = ng.Button(self.img_window, "Calibrate")
 
         def calibrate_cb():
+            if self.img_idx >= len(self.fnames):
+                print("All images labeled.")
+                return
             frame = self.orig_img
             center = self.circle.center
             radius = self.circle.radius
@@ -152,16 +172,9 @@ class CalibrateApp(ng.Screen):
             self.read_all = True
 
     def overlay_circle(self, orig_img, circle):
-        center = circle.center
-        radius = circle.radius
-        color_circle = circle.color_circle
-        opacity = circle.opacity
-
-        overlay = orig_img.copy()
-        center_tuple = (int(center[0]), int(center[1]))
-        cv2.circle(overlay, center_tuple, radius, color_circle, -1)
-        cv2.addWeighted(overlay, opacity, orig_img, 1 - opacity, 0, overlay)
-        return overlay
+        img = orig_img.copy()
+        img = circle.draw_on(img)
+        return img
 
     def draw(self, ctx):
         self.img_window.set_size((2000, 2600))
@@ -260,43 +273,43 @@ def label_data():
         description="Label the ball indenter data using Nanogui."
     )
     parser.add_argument(
-        "-b",
-        "--calib_dir",
+        "--serial",
         type=str,
-        help="path to save calibration data",
+        required=True,
+        help="sensor serial number (directory name under sensors/)",
     )
     parser.add_argument(
-        "-c",
-        "--config_path",
+        "--sensors_root",
         type=str,
-        help="path of configuring gelsight",
-        default=os.path.join(config_dir, "gsmini.yaml"),
+        default=DEFAULT_SENSORS_ROOT,
+        help="root directory containing sensors/<serial>/",
     )
     parser.add_argument(
-        "-d",
         "--display_difference",
         action="store_true",
         help="Display the difference between the background image",
     )
     parser.add_argument(
-        "-r",
         "--detect_circle",
         action="store_true",
         help="Automatically detect the circle in the image",
     )
     args = parser.parse_args()
 
-    # Read the configuration
-    config_path = args.config_path
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-        imgh = config["imgh"]
-        imgw = config["imgw"]
+    # Set up paths
+    sensor_dir = os.path.join(args.sensors_root, args.serial)
+    config_path = os.path.join(sensor_dir, f"{args.serial}.yaml")
+    calib_dir = os.path.join(sensor_dir, "calibration")
+
+    # Load config
+    config = load_config(config_path=config_path)
+    imgh = config["imgh"]
+    imgw = config["imgw"]
 
     # Start the label process
     ng.init()
     app = CalibrateApp(
-        args.calib_dir,
+        calib_dir,
         imgw,
         imgh,
         display_difference=args.display_difference,

@@ -1,11 +1,11 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="gs_sdk",
+    name="vistac_sdk",
     version="0.1.0",
-    description="SDK for GelSight sensors usage, reconstruction, and calibration.",
-    author="Hung-Jui Huang, Ruihan Gao",
-    author_email="hungjuih@andrew.cmu.edu, ruihang@andrew.cmu.edu",
+    description="SDK for visual-tactile sensors usage, reconstruction, and calibration. Edited from https://github.com/joehjhuang/gs_sdk",
+    author="Byung-Hyun Song",
+    author_email="bh.song@snu.ac.kr",
     packages=find_packages(),
     install_requires=[
         "pillow==10.0.0",
@@ -20,12 +20,12 @@ setup(
     ],
     python_requires=">=3.9",
     entry_points={
-        'console_scripts': [
-            'collect_data=calibration.collect_data:collect_data',
-            'label_data=calibration.label_data:label_data',
-            'prepare_data=calibration.prepare_data:prepare_data',
-            'train_model=calibration.train_model:train_model',
-            'test_model=calibration.test_model:test_model',
+        "console_scripts": [
+            "vistac-collect=vistac_sdk.calibration.collect_data:collect_data",
+            "vistac-label=vistac_sdk.calibration.label_data:label_data",
+            "vistac-prepare=vistac_sdk.calibration.prepare_data:prepare_data",
+            "vistac-train=vistac_sdk.calibration.train_model:train_model",
+            "vistac-test=vistac_sdk.calibration.test_model:test_model",
         ],
     },
     classifiers=[

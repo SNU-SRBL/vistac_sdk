@@ -1,0 +1,13 @@
+# Device Type
+device_type: "DIGIT"
+# Device Serial Number
+device_serial: "D21275"
+# Pixel Per Millimeter
+ppmm: 18.821
+# Desired Image Width and Height
+imgh: 320
+imgw: 240
+# Raw image width, height, and framerate
+raw_imgh: 320
+raw_imgw: 240
+framerate: 30

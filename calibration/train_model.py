@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 
 from calibration.utils import load_csv_as_dict
 from calibration.dataset import BGRXYDataset
-from gs_sdk.gs_reconstruct import BGRXYMLPNet
+from vistac_sdk.vistac_reconstruct import BGRXYMLPNet
 
 """
 This script trains the gradient prediction network.
@@ -23,24 +23,32 @@ Prerequisite:
     - Labeled data are prepared into dataset.
 
 Usage:
-    python train.py --calib_dir CALIB_DIR [--n_epochs N_EPOCHS] [--lr LR] [--device {cpu, cuda}]
+    python train_model.py --serial SERIAL [--sensors_root SENSORS_ROOT] [--n_epochs N_EPOCHS] [--lr LR] [--device {cpu, cuda}]
 
 Arguments:
-    --calib_dir: Path to the directory where the collected data will be saved
+    --serial: Sensor serial number (directory name under sensors/)
+    --sensors_root: (Optional) Root directory for sensors/<serial>/ (default: gs_sdk/sensors)
     --n_epochs: (Optional) Number of training epochs. Default is 200.
     --lr: (Optional) Learning rate. Default is 0.002.
     --device: (Optional) The device to train the network. Can choose between cpu and cuda. Default is cpu.
 """
 
+DEFAULT_SENSORS_ROOT = os.path.join(os.path.dirname(__file__), "../sensors")
 
 def train_model():
     # Argument Parsers
     parser = argparse.ArgumentParser(description="Train the model from BGRXY to gxy.")
     parser.add_argument(
-        "-b",
-        "--calib_dir",
+        "--serial",
         type=str,
-        help="place where the calibration data is stored",
+        required=True,
+        help="sensor serial number (directory name under sensors/)",
+    )
+    parser.add_argument(
+        "--sensors_root",
+        type=str,
+        default=DEFAULT_SENSORS_ROOT,
+        help="root directory containing sensors/<serial>/",
     )
     parser.add_argument(
         "-ne", "--n_epochs", type=int, default=200, help="number of training epochs"
@@ -56,9 +64,10 @@ def train_model():
     )
     args = parser.parse_args()
 
-    # Create the model directory
-    calib_dir = args.calib_dir
-    model_dir = os.path.join(calib_dir, "model")
+    # Set up paths
+    sensor_dir = os.path.join(args.sensors_root, args.serial)
+    calib_dir = os.path.join(sensor_dir, "calibration")
+    model_dir = os.path.join(sensor_dir, "model")
     if not os.path.isdir(model_dir):
         os.makedirs(model_dir)
 
@@ -86,7 +95,7 @@ def train_model():
         data = np.load(data_path)
         test_data["all_bgrxys"].append(data["bgrxys"][data["mask"]])
         test_data["all_gxyangles"].append(data["gxyangles"][data["mask"]])
-    #Load background data
+    # Load background data
     bg_path = os.path.join(calib_dir, "background_data.npz")
     bg_data = np.load(bg_path)
     bgrxys = bg_data["bgrxys"][bg_data["mask"]]
