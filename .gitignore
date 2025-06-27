@@ -169,3 +169,5 @@ cython_debug/
 #  store them in a separate location.
 sensors/D21273/calibration
 sensors/D21275/calibration
+sensors/D21242/calibration
+sensors/D21119/calibration
