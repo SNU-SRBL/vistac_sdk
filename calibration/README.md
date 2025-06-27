@@ -4,6 +4,11 @@ Refer to the original [gs-sdk/calibration](https://github.com/joehjhuang/gs_sdk/
 ### Preperation
 For a sensor with {serial} number, you need a {serial}.yaml inside sensors/{serial}/{serial}.yaml
 
+#### (Optional) Adding Diffuser to LED
+Due to varience of the acrylic window's side surface roughness, sharpness of the LED's are different. For sensors that have too much sharpness, applying Scotch Magic Tape to the side will smooth the light.
+
+<img src="../assets/magic_tape.jpg" width="150"/>
+
 ### Pixel-per-millimeter Measurement
 Borrowed from [digit-depth/scripts/mm_to_pix.py](https://github.com/vocdex/digit-depth/blob/main/scripts/mm_to_pix.py).
 Press the sensor with a known length, such as a caliper. Press the two points for 5 tries. Copy the output and edit the corresponding sensor's yaml.
