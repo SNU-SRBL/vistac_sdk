@@ -40,3 +40,7 @@ Stream reconstructed surface from a connected DIGIT sensor:
 ```python
 python apps/live_viewer.py --serial D21273 --use_mask --mode depth --relative --relative_scale 0.5
 ```
+
+
+## References
+1. Huang, Hung-Jui and Kaess, Michael and Yuan, Wenzhen, “NormalFlow: Fast, Robust, and Accurate Contact-based Object 6DoF Pose Tracking with Vision-based Tactile Sensors,” IEEE Robotics and Automation Letters, 2024.
