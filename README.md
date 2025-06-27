@@ -1,22 +1,10 @@
-# GelSight SDK
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0) &nbsp;[<img src="assets/rpl.png" height=20px>](https://rpl.ri.cmu.edu/)
+# Visual-tactile SDK
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0) &nbsp;
 
-This repository is a modified version of the [the official gsrobotics implementation](https://github.com/gelsightinc/gsrobotics), offering improvements in usability and sensor compatibility.
-
-## Key Features
-
-- **Sensor Calibration**: Added functionality for users to calibrate their own GelSight sensors.
-
-- **Expanded Sensor Compatibility**: Compatible with other GelSight sensors, including Digit and lab-made sensors.
-
-- **Low-Latency Sensor Reading**: Including an enhanced image streaming pipeline for reduced latency and frame drop, especially for GelSight Mini.
-
-    ⚠️ The original streaming implementation uses OpenCV and may drop to ~10 Hz. The low-latency version uses FFmpeg to maintain 25 Hz, **but on some systems it can introduce severe frame delay and duplication**. Contributions to improve this are welcome via Pull Request.
-
+This repository is a modified version of [gs_sdk](https://github.com/joehjhuang/gs_sdk) with automatic DIGIT identifying, threaded image collection and calculation, and ROS2 implementation.
 
 Authors:
-* [Hung-Jui Huang](https://joehjhuang.github.io/) (hungjuih@andrew.cmu.edu)
-* Ruihan Gao (ruihang@andrew.cmu.edu)
+* [Byung-Hyun Song](https://github.com/bhsong1011) (bh.song@snu.ac.kr)
 
 ## Support System
 * Tested on Ubuntu 22.04
@@ -26,38 +14,29 @@ Authors:
 ## Installation
 Clone and install gs_sdk from source:
 ```bash
-git clone git@github.com:joehjhuang/gs_sdk.git
-cd gs_sdk
+git clone git@github.com:SNU-SRBL/gs_sdk.git
+cd vistac_sdk
 pip install -e .
 ```
 
-## Coordinate Conventions
-The coordinate system convention in this SDK is shown below, using the GelSight Mini sensor for illustration:
-
-| 2D (sensor image)                           | 3D                         |
-| --------------------------------- | --------------------------------- |
-| <img src="assets/gsmini_frame_2D.png" width="200"/>  | <img src="assets/gsmini_frame_3D.png" width="200"/>    |
+## Sensor Identification
+For multiple DIGIT sensor usage, sensor identification method was implemented from [digit-interface](https://github.com/facebookresearch/digit-interface).
+### Sensor Registeration
+For a sensor with {serial} number, you need a {serial}.yaml inside sensors/{serial}/{serial}.yaml
 
 ## Sensor Calibration
 For more details on sensor calibration, see the [Calibration README](calibration/README.md).
 
 ## Examples
-These examples show basic usage of this GelSight SDK.
+These examples show basic usage.
 ### Sensor Streaming
-Stream images from a connected GelSight Mini:
+Stream images from a connected DIGIT sensor:
 ```python
-python examples/stream_device.py
+python vistac_sdk/test_camera.py
 ```
 
-### Low Latency Sensor Streaming
-Stream images with low latency and without frame dropping from a connected GelSight Mini:
+### Sensor Real-time Reconstruction
+Stream reconstructed surface from a connected DIGIT sensor:
 ```python
-python examples/fast_stream_device.py
+python apps/live_viewer.py --serial D21273 --use_mask --mode depth --relative --relative_scale 0.5
 ```
-
-### Reconstruct Touched Surface
-Reconstruct a touched surface using the calibration model. Calibration steps are detailed in the [Calibration README](calibration/README.md).
-```python
-python examples/reconstruct.py
-```
-The reconstructed surface will be displayed and saved in `examples/data`.
