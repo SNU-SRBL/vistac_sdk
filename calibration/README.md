@@ -8,7 +8,7 @@ For a sensor with {serial} number, you need a {serial}.yaml inside sensors/{seri
 Borrowed from [digit-depth/scripts/mm_to_pix.py](https://github.com/vocdex/digit-depth/blob/main/scripts/mm_to_pix.py).
 Press the sensor with a known length, such as a caliper. Press the two points for 5 tries. Copy the output and edit the corresponding sensor's yaml.
 DO NOT PRESS THE SENSOR WITH THE TIP OF THE CALIPER. It will tear the gel. Press the caliper from the side.
-<img src="../assets/caliper.png" width="150"/>
+<img src="../assets/caliper.jpg" width="150"/>
 ```bash
 mm_to_ppmm.py --serial SERIAL --distance_mm DISTANCE_MM [--frames N] [--sensors_root SENSORS_ROOT]
 ```
