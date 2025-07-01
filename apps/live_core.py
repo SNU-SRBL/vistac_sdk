@@ -1,6 +1,7 @@
 import os
 import time
 import numpy as np
+import pathlib
 from vistac_sdk.vistac_device import Camera
 from vistac_sdk.vistac_reconstruct import Reconstructor
 from vistac_sdk.utils import load_config
@@ -13,7 +14,7 @@ class LiveReconstructor:
     def __init__(
         self,
         serial,
-        sensors_root,
+        sensors_root: str | os.PathLike | None = None,
         model_device="cuda",
         mode="depth",
         use_mask=True,
@@ -21,6 +22,14 @@ class LiveReconstructor:
         relative=True,
         relative_scale=0.5
     ):
+        if sensors_root is None:
+            sdk_root = pathlib.Path(__file__).resolve().parents[1]
+            sensors_root = sdk_root / "sensors"
+        sensors_root = pathlib.Path(sensors_root)
+        if not sensors_root.exists():
+            raise FileNotFoundError(
+                f"sensors_root '{sensors_root}' does not exist")
+        
         sensor_dir = os.path.join(sensors_root, serial)
         config_path = os.path.join(sensor_dir, f"{serial}.yaml")
         model_path = os.path.join(sensor_dir, "model", "nnmodel.pth")
