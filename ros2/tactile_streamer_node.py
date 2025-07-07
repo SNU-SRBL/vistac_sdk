@@ -5,7 +5,7 @@ from std_msgs.msg import Header
 from cv_bridge import CvBridge
 import numpy as np
 
-from apps.live_core import LiveReconstructor
+from vistac_sdk.live_core import LiveReconstructor
 
 '''
 This ROS2 node streams tactile data from a sensor using the LiveReconstructor class.

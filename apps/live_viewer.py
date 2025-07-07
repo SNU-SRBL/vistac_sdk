@@ -5,7 +5,7 @@ import numpy as np
 import open3d as o3d
 import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
-from apps.live_core import LiveReconstructor
+from vistac_sdk.live_core import LiveReconstructor
 
 DEFAULT_SENSORS_ROOT = os.path.join(os.path.dirname(__file__), "../sensors")
 
