@@ -20,8 +20,11 @@ class LiveReconstructor:
         use_mask=True,
         refine_mask=True,
         relative=True,
-        relative_scale=0.5
+        relative_scale=0.5,
+        mask_only_pointcloud: bool = False,
     ):
+        self._mask_only = mask_only_pointcloud
+
         if sensors_root is None:
             sdk_root = pathlib.Path(__file__).resolve().parents[1]
             sensors_root = sdk_root / "sensors"
@@ -56,7 +59,8 @@ class LiveReconstructor:
             use_mask=use_mask,
             refine_mask=refine_mask,
             relative=relative,
-            relative_scale=relative_scale
+            relative_scale=relative_scale,
+            mask_only_pointcloud=self._mask_only,
         )
         self.mode = mode
 

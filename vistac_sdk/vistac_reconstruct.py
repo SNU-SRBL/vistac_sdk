@@ -206,7 +206,8 @@ class Reconstructor:
         return depth_map
     
     def get_point_cloud(self, image, ppmm, color_dist_threshold=15,
-                        height_threshold=0.2, use_mask=True, refine_mask=True, return_color=False):
+                        height_threshold=0.2, use_mask=True, refine_mask=True, return_color=False,
+                        mask_only_pointcloud=False):
         """
         Get the point cloud from the GelSight image.
         :param image: np.array (H, W, 3); the gelsight image.
@@ -215,6 +216,7 @@ class Reconstructor:
         :param height_threshold: float; the height threshold for contact mask.
         :param use_mask: bool; whether to use the contact mask.
         :param return_color: bool; whether to return the color information.
+        :param mask_only_pointcloud: if True, returns only points where mask is True.
         :return: np.array (N, 3); the point cloud (scaled in meters).
         """
         G, H, C = self.get_surface_info(
@@ -225,11 +227,14 @@ class Reconstructor:
 
         pc = height2pointcloud(H, ppmm) # Convert height map to point cloud
 
-        if use_mask:    # Apply contact mask if specified
-            mask_flat = (C != 0).ravel()
-            pc_bg_flat = pc.copy()
-            pc_bg_flat[~mask_flat, 2] = 0.0   # keep x,y; zero z
-            pc = pc_bg_flat
+        mask_flat = C.ravel()
+        if use_mask:
+            if mask_only_pointcloud:
+                pc = pc[mask_flat]
+            else:
+                pc_bg = pc.copy()
+                pc_bg[~mask_flat, 2] = 0.0
+                pc = pc_bg
         
         if return_color:
             # Convert image to grayscale and flatten
@@ -240,7 +245,7 @@ class Reconstructor:
         else:
             return pc
         
-    def start_thread(self, ppmm, mode="gradient", use_mask=True, refine_mask=True, relative=False, relative_scale=1.0):
+    def start_thread(self, ppmm, mode="gradient", use_mask=True, refine_mask=True, relative=False, relative_scale=1.0, mask_only_pointcloud=False):
         """
         Start a background thread to continuously process images.
         :param ppmm: float; the pixel per mm.
@@ -249,6 +254,7 @@ class Reconstructor:
         :param refine_mask: bool; whether to refine the contact mask.
         :param relative: bool; whether to normalize depth to the range [0, 1].
         :param relative_scale: float; the scale for relative depth normalization.
+        :param mask_only_pointcloud: bool; if True, use only masked area for point cloud.
         """
         if self._threaded:
             self._running = True
@@ -258,6 +264,7 @@ class Reconstructor:
             self._refine_mask = refine_mask
             self._relative = relative
             self._relative_scale = relative_scale
+            self._mask_only = mask_only_pointcloud
             self._thread = threading.Thread(target=self._thread_loop, daemon=True)
             self._thread.start()
 
@@ -271,7 +278,7 @@ class Reconstructor:
                 elif self._mode == "depth":
                     result = self.get_depth(frame, self._ppmm, use_mask=self._use_mask, refine_mask=self._refine_mask, relative=self._relative, relative_scale=self._relative_scale)
                 elif self._mode == "pointcloud":
-                    result = self.get_point_cloud(frame, self._ppmm, use_mask=self._use_mask, refine_mask=self._refine_mask, return_color=False)
+                    result = self.get_point_cloud(frame, self._ppmm, use_mask=self._use_mask, refine_mask=self._refine_mask, return_color=False, mask_only_pointcloud=self._mask_only)
                 with self._lock:
                     self._latest_result = result
             time.sleep(0.001)

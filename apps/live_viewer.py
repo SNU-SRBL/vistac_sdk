@@ -56,7 +56,8 @@ def run_live_viewer(
     device_type="cuda",
     refine_mask=False,
     relative=False,
-    relative_scale=0.5
+    relative_scale=0.5,
+    mask_only_pointcloud=False
 ):
     recon = LiveReconstructor(
         serial=serial,
@@ -66,7 +67,8 @@ def run_live_viewer(
         use_mask=use_mask,
         refine_mask=refine_mask,
         relative=relative,
-        relative_scale=relative_scale
+        relative_scale=relative_scale,
+        mask_only_pointcloud=mask_only_pointcloud
     )
     device_type = recon.device_type
     ppmm = recon.ppmm
@@ -177,6 +179,10 @@ if __name__ == "__main__":
         help="Scale factor for relative depth"
     )
     parser.add_argument(
+        "--mask_only_pointcloud", action="store_true", default=False,
+        help="If set, use only masked area for point cloud"
+    )
+    parser.add_argument(
         "--device_type", type=str, choices=["cuda", "cpu"], default="cuda",
         help="Device type for model inference"
     )
@@ -189,5 +195,6 @@ if __name__ == "__main__":
         device_type=args.device_type,
         refine_mask=args.refine_mask,
         relative=args.relative,
-        relative_scale=args.relative_scale
+        relative_scale=args.relative_scale,
+        mask_only_pointcloud=args.mask_only_pointcloud
     )
