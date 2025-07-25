@@ -172,7 +172,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--relative", action="store_true", default=False,
-        help="If set, use relative depth for point cloud"
+        help="If set, use relative depth for depth image"
     )
     parser.add_argument(
         "--relative_scale", type=float, default=0.5,
