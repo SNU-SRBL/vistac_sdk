@@ -13,10 +13,14 @@ setup(
         "opencv-python>=4.9.0",
         "scipy>=1.13.1",
         "torch>=2.1.0",
+        "torchvision>=0.16.0",
         "PyYaml>=6.0.1",
         "matplotlib>=3.9.0",
         "ffmpeg-python",
-        "nanogui"
+        "nanogui",
+        "open3d>=0.17.0",
+        "scikit-learn>=1.3.0",
+        "tqdm>=4.65.0"
     ],
     python_requires=">=3.9",
     entry_points={
