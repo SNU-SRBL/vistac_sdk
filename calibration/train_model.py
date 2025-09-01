@@ -16,6 +16,7 @@ from vistac_sdk.vistac_reconstruct import BGRXYMLPNet
 """
 This script trains the gradient prediction network.
 The network is trained as MLP taking the pixel BGRXY as input and predict the gradients gx, gy.
+Gaussian noise can be added to BGRXY features during training for improved robustness.
 
 Prerequisite:
     - Tactile images collected using ball indenters with known diameters are collected.
@@ -23,7 +24,7 @@ Prerequisite:
     - Labeled data are prepared into dataset.
 
 Usage:
-    python train_model.py --serial SERIAL [--sensors_root SENSORS_ROOT] [--n_epochs N_EPOCHS] [--lr LR] [--device {cpu, cuda}]
+    python train_model.py --serial SERIAL [--sensors_root SENSORS_ROOT] [--n_epochs N_EPOCHS] [--lr LR] [--device {cpu, cuda}] [--noise_std NOISE_STD]
 
 Arguments:
     --serial: Sensor serial number (directory name under sensors/)
@@ -31,9 +32,15 @@ Arguments:
     --n_epochs: (Optional) Number of training epochs. Default is 200.
     --lr: (Optional) Learning rate. Default is 0.002.
     --device: (Optional) The device to train the network. Can choose between cpu and cuda. Default is cpu.
+    --noise_std: (Optional) Standard deviation of Gaussian noise added to BGRXY during training. Default is 0.1. Set to 0 to disable noise.
 """
 
 DEFAULT_SENSORS_ROOT = os.path.join(os.path.dirname(__file__), "../sensors")
+
+def add_noise_to_bgrxy(bgrxys, noise_std=0.01):
+    """Add Gaussian noise to BGRXY features for robustness during training"""
+    noise = torch.randn_like(bgrxys) * noise_std
+    return bgrxys + noise
 
 def train_model():
     # Argument Parsers
@@ -59,8 +66,14 @@ def train_model():
         "--device",
         type=str,
         choices=["cpu", "cuda"],
-        default="cpu",
+        default="cuda",
         help="the device to train NN",
+    )
+    parser.add_argument(
+        "--noise_std",
+        type=float,
+        default=0.1,
+        help="standard deviation of Gaussian noise added to BGRXY during training (0 to disable)",
     )
     args = parser.parse_args()
 
@@ -127,7 +140,7 @@ def train_model():
     net = BGRXYMLPNet().to(device)
     criterion = nn.L1Loss()
     optimizer = optim.Adam(net.parameters(), lr=args.lr, weight_decay=0.0)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.7)
 
     # Initial evaluation
     train_mae = evaluate(net, train_dataloader, device)
@@ -143,6 +156,9 @@ def train_model():
         net.train()
         for bgrxys, gxyangles in train_dataloader:
             bgrxys = bgrxys.to(device)
+            # Add noise during training only for robustness
+            if net.training and args.noise_std > 0:
+                bgrxys = add_noise_to_bgrxy(bgrxys, noise_std=args.noise_std)
             gxyangles = gxyangles.to(device)
             optimizer.zero_grad()
             outputs = net(bgrxys)

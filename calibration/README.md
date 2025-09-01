@@ -65,10 +65,13 @@ python prepare_data.py --serial SERIAL [--sensors_root SENSORS_ROOT] [--radius_r
 ```
 
 ### Train Calibration Model
-Train the MLP model to map pixel color and location (RGBXY) to surface gradients for each pixel. Use the following command to train the model with the collected dataset:
+Train the MLP model to map pixel color and location (RGBXY) to surface gradients for each pixel. Gaussian noise can be added to BGRXY features during training for improved robustness. Use the following command to train the model with the collected dataset:
 ```bash
-python train_model.py --serial SERIAL [--sensors_root SENSORS_ROOT] [--n_epochs N_EPOCHS] [--lr LR] [--device {cpu, cuda}]
+python train_model.py --serial SERIAL [--sensors_root SENSORS_ROOT] [--n_epochs N_EPOCHS] [--lr LR] [--device {cpu, cuda}] [--noise_std NOISE_STD]
 ```
+
+* Additional Parameters:
+  * `--noise_std`: Standard deviation of Gaussian noise added to BGRXY during training (default: 0.02). Set to 0 to disable noise augmentation.
 
 The trained model is saved in `CALIB_DIR/model/nnmodel.pth`.
 
@@ -76,9 +79,20 @@ The trained model is saved in `CALIB_DIR/model/nnmodel.pth`.
 Once the model is trained, connect the sensor and run the following command to stream images and perform real-time surface reconstruction using the trained calibration model:
 
 ```bash
-python test_model.py --serial SERIAL --sensors_root SENSORS_ROOT [--device_type DEVICE_TYPE] [--mode MODE] [--use_mask]
+python test_model.py --serial SERIAL [--sensors_root SENSORS_ROOT] [--device_type DEVICE_TYPE] [--mode MODE] [--use_mask] [--refine_mask] [--relative] [--relative_scale SCALE] [--mask_only_pointcloud]
 ```
-After starting, wait briefly for background data collection; real-time surface gradient predictions will then be displayed. Press any key to exit.
+
+* Visualization Modes:
+  * `--mode {depth,gradient,pointcloud}`: Visualization type (default: depth)
+* Masking Options:
+  * `--use_mask`: Show only valid contact area
+  * `--refine_mask`: Apply morphological operations to refine mask
+  * `--mask_only_pointcloud`: Use mask only for point cloud mode
+* Depth Options:
+  * `--relative`: Use relative depth instead of absolute
+  * `--relative_scale`: Scale factor for relative depth (default: 0.5)
+
+After starting, wait briefly for background data collection; real-time surface gradient predictions will then be displayed. Press any key to exit (for depth/gradient modes) or close the window (for pointcloud mode).
 
 
 ### References
