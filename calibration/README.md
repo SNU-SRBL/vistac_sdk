@@ -79,7 +79,7 @@ The trained model is saved in `CALIB_DIR/model/nnmodel.pth`.
 Once the model is trained, connect the sensor and run the following command to stream images and perform real-time surface reconstruction using the trained calibration model:
 
 ```bash
-python test_model.py --serial SERIAL [--sensors_root SENSORS_ROOT] [--device_type DEVICE_TYPE] [--mode MODE] [--use_mask] [--refine_mask] [--relative] [--relative_scale SCALE] [--mask_only_pointcloud]
+python test_model.py --serial SERIAL [--sensors_root SENSORS_ROOT] [--device_type DEVICE_TYPE] [--mode MODE] [--use_mask] [--refine_mask] [--relative] [--relative_scale SCALE] [--mask_only_pointcloud] [--color_dist_threshold THRESHOLD] [--height_threshold THRESHOLD]
 ```
 
 * Visualization Modes:
@@ -88,6 +88,8 @@ python test_model.py --serial SERIAL [--sensors_root SENSORS_ROOT] [--device_typ
   * `--use_mask`: Show only valid contact area
   * `--refine_mask`: Apply morphological operations to refine mask
   * `--mask_only_pointcloud`: Use mask only for point cloud mode
+  * `--color_dist_threshold`: Color distance threshold for contact mask (default: 15)
+  * `--height_threshold`: Height threshold for contact mask in mm (default: 0.2)
 * Depth Options:
   * `--relative`: Use relative depth instead of absolute
   * `--relative_scale`: Scale factor for relative depth (default: 0.5)

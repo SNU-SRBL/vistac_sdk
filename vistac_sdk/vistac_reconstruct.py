@@ -245,7 +245,7 @@ class Reconstructor:
         else:
             return pc
         
-    def start_thread(self, ppmm, mode="gradient", use_mask=True, refine_mask=True, relative=False, relative_scale=1.0, mask_only_pointcloud=False):
+    def start_thread(self, ppmm, mode="gradient", use_mask=True, refine_mask=True, relative=False, relative_scale=1.0, mask_only_pointcloud=False, color_dist_threshold=15, height_threshold=0.2):
         """
         Start a background thread to continuously process images.
         :param ppmm: float; the pixel per mm.
@@ -255,6 +255,8 @@ class Reconstructor:
         :param relative: bool; whether to normalize depth to the range [0, 1].
         :param relative_scale: float; the scale for relative depth normalization.
         :param mask_only_pointcloud: bool; if True, use only masked area for point cloud.
+        :param color_dist_threshold: float; the color distance threshold for contact mask.
+        :param height_threshold: float; the height threshold for contact mask.
         """
         if self._threaded:
             self._running = True
@@ -265,6 +267,8 @@ class Reconstructor:
             self._relative = relative
             self._relative_scale = relative_scale
             self._mask_only = mask_only_pointcloud
+            self._color_dist_threshold = color_dist_threshold
+            self._height_threshold = height_threshold
             self._thread = threading.Thread(target=self._thread_loop, daemon=True)
             self._thread.start()
 
@@ -274,11 +278,11 @@ class Reconstructor:
                 frame = self._input_frame
             if frame is not None:
                 if self._mode == "gradient":
-                    result = self.get_gradient(frame, self._ppmm, use_mask=self._use_mask, refine_mask=self._refine_mask)
+                    result = self.get_gradient(frame, self._ppmm, color_dist_threshold=self._color_dist_threshold, height_threshold=self._height_threshold, use_mask=self._use_mask, refine_mask=self._refine_mask)
                 elif self._mode == "depth":
-                    result = self.get_depth(frame, self._ppmm, use_mask=self._use_mask, refine_mask=self._refine_mask, relative=self._relative, relative_scale=self._relative_scale)
+                    result = self.get_depth(frame, self._ppmm, color_dist_threshold=self._color_dist_threshold, height_threshold=self._height_threshold, use_mask=self._use_mask, refine_mask=self._refine_mask, relative=self._relative, relative_scale=self._relative_scale)
                 elif self._mode == "pointcloud":
-                    result = self.get_point_cloud(frame, self._ppmm, use_mask=self._use_mask, refine_mask=self._refine_mask, return_color=False, mask_only_pointcloud=self._mask_only)
+                    result = self.get_point_cloud(frame, self._ppmm, color_dist_threshold=self._color_dist_threshold, height_threshold=self._height_threshold, use_mask=self._use_mask, refine_mask=self._refine_mask, return_color=False, mask_only_pointcloud=self._mask_only)
                 with self._lock:
                     self._latest_result = result
             time.sleep(0.001)

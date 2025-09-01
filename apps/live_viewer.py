@@ -57,7 +57,9 @@ def run_live_viewer(
     refine_mask=False,
     relative=False,
     relative_scale=0.5,
-    mask_only_pointcloud=False
+    mask_only_pointcloud=False,
+    color_dist_threshold=15,
+    height_threshold=0.2
 ):
     recon = LiveReconstructor(
         serial=serial,
@@ -68,7 +70,9 @@ def run_live_viewer(
         refine_mask=refine_mask,
         relative=relative,
         relative_scale=relative_scale,
-        mask_only_pointcloud=mask_only_pointcloud
+        mask_only_pointcloud=mask_only_pointcloud,
+        color_dist_threshold=color_dist_threshold,
+        height_threshold=height_threshold
     )
     device_type = recon.device_type
     ppmm = recon.ppmm
@@ -186,6 +190,14 @@ if __name__ == "__main__":
         "--device_type", type=str, choices=["cuda", "cpu"], default="cuda",
         help="Device type for model inference"
     )
+    parser.add_argument(
+        "--color_dist_threshold", type=float, default=15,
+        help="Color distance threshold for contact mask"
+    )
+    parser.add_argument(
+        "--height_threshold", type=float, default=0.2,
+        help="Height threshold for contact mask (in mm)"
+    )
     args = parser.parse_args()
     run_live_viewer(
         serial=args.serial,
@@ -196,5 +208,7 @@ if __name__ == "__main__":
         refine_mask=args.refine_mask,
         relative=args.relative,
         relative_scale=args.relative_scale,
-        mask_only_pointcloud=args.mask_only_pointcloud
+        mask_only_pointcloud=args.mask_only_pointcloud,
+        color_dist_threshold=args.color_dist_threshold,
+        height_threshold=args.height_threshold
     )

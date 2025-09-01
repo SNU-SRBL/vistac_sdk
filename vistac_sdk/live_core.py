@@ -22,6 +22,8 @@ class LiveReconstructor:
         relative=True,
         relative_scale=0.5,
         mask_only_pointcloud: bool = False,
+        color_dist_threshold=15,
+        height_threshold=0.2,
     ):
         self._mask_only = mask_only_pointcloud
 
@@ -61,6 +63,8 @@ class LiveReconstructor:
             relative=relative,
             relative_scale=relative_scale,
             mask_only_pointcloud=self._mask_only,
+            color_dist_threshold=color_dist_threshold,
+            height_threshold=height_threshold,
         )
         self.mode = mode
 

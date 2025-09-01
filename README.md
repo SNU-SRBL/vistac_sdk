@@ -38,7 +38,7 @@ python vistac_sdk/test_camera.py
 ### Sensor Real-time Reconstruction
 Stream reconstructed surface from a connected DIGIT sensor:
 ```python
-python apps/live_viewer.py --serial D21273 --use_mask --mode depth --relative --relative_scale 0.5
+python apps/live_viewer.py --serial D21273 --use_mask --mode depth --relative --relative_scale 0.5 --height_threshold 0.5
 ```
 
 
