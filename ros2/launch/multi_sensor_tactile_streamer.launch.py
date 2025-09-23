@@ -75,6 +75,7 @@ def launch_setup(context, *args, **kwargs):
         )
         nodes.append(node)
     
+    return nodes
 def generate_launch_description():
     return LaunchDescription([
         # Declare launch arguments with defaults
