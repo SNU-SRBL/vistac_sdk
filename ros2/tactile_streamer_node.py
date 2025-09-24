@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, PointCloud2, PointField
@@ -76,19 +78,24 @@ class TactileStreamerNode(Node):
         self.return_color = return_color
 
         # Initialize LiveReconstructor with all parameters
-        self.recon = LiveReconstructor(
-            serial=serial,
-            sensors_root=sensors_root,
-            model_device=model_device,
-            mode=mode,
-            use_mask=use_mask,
-            refine_mask=refine_mask,
-            relative=relative,
-            relative_scale=relative_scale,
-            mask_only_pointcloud=mask_only_pointcloud,
-            color_dist_threshold=color_dist_threshold,
-            height_threshold=height_threshold
-        )
+        try:
+            self.recon = LiveReconstructor(
+                serial=serial,
+                sensors_root=sensors_root,
+                model_device=model_device,
+                mode=mode,
+                use_mask=use_mask,
+                refine_mask=refine_mask,
+                relative=relative,
+                relative_scale=relative_scale,
+                mask_only_pointcloud=mask_only_pointcloud,
+                color_dist_threshold=color_dist_threshold,
+                height_threshold=height_threshold
+            )
+        except RuntimeError as e:
+            self.get_logger().error(f"Failed to initialize sensor {serial}: {e}")
+            self.get_logger().info(f"Tactile sensor {serial} not detected. Exiting gracefully.")
+            raise SystemExit(0)  # Exit gracefully without error
 
         self.bridge = CvBridge()
         
