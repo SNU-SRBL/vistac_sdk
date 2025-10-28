@@ -74,7 +74,7 @@ def train_model():
     parser.add_argument(
         "--noise_std",
         type=float,
-        default=0.03,
+        default=0.1,
         help="standard deviation of Gaussian noise added to BGRXY during training (0 to disable)",
     )
     args = parser.parse_args()
