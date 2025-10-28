@@ -38,8 +38,10 @@ Arguments:
 DEFAULT_SENSORS_ROOT = os.path.join(os.path.dirname(__file__), "../sensors")
 
 def add_noise_to_bgrxy(bgrxys, noise_std=0.01):
-    """Add Gaussian noise to BGRXY features for robustness during training"""
+    """Add Gaussian noise to BGR features only (not XY) for robustness during training"""
     noise = torch.randn_like(bgrxys) * noise_std
+    # Only apply noise to BGR channels (first 3 dimensions), not XY coordinates
+    noise[:, 3:] = 0  # Zero out noise for X and Y channels
     return bgrxys + noise
 
 def train_model():
@@ -72,7 +74,7 @@ def train_model():
     parser.add_argument(
         "--noise_std",
         type=float,
-        default=0.1,
+        default=0.03,
         help="standard deviation of Gaussian noise added to BGRXY during training (0 to disable)",
     )
     args = parser.parse_args()
