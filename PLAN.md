@@ -768,15 +768,42 @@ if 'force_field' in outputs and not self._force_enabled:
 
 **Result**: Clean codebase with optimized structure. Steps 8-9 simplified to just add force-specific features.
 
-### 8. Update Visualization Utilities
+### 8. Update Visualization Utilities ✅ COMPLETE
 **File**: `vistac_sdk/viz_utils.py`
 
-**New functions**:
-- `visualize_force_field(normal, shear, overlay_image=None)`: RGB heatmap
-- `visualize_force_vector(fx, fy, fz, image)`: arrow overlay
+**Status**: COMPLETE (February 9, 2026)
 
-**Updates**:
-- Update `plot_gradients()` to accept dict format
+**What was done**:
+- Updated `plot_gradients()` to accept dict format from `result_dict['gradient']`
+- Added support for `[H, W, 2]` array format (combined gradient array)
+- Implemented `visualize_force_field()` for RGB heatmap visualization:
+  - RGB channels: R=Fx (horizontal shear), G=Fz (normal), B=Fy (vertical shear)
+  - Optional image overlay with alpha blending
+  - Auto-resize to match overlay image dimensions
+  - Grayscale to RGB conversion support
+- Implemented `visualize_force_vector()` for arrow overlay visualization:
+  - Arrow for in-plane forces (fx, fy)
+  - Circle for normal force (fz) with size proportional to magnitude
+  - Text overlay showing individual components and total magnitude
+  - Customizable arrow parameters (scale, color, thickness)
+- Added cv2 import for image processing operations
+- Fixed mask dtype issue in quiver mode (boolean required for array indexing)
+- Comprehensive test suite with 19 unit tests covering all functionality
+
+**Deviations from plan**:
+- **None** - Implemented exactly as specified
+
+**Verification**:
+- All 19 new tests passed ✓
+- All 87 total tests passed (including existing tests) ✓
+- plot_gradients supports dict, combined array, and separate array formats ✓
+- Force field heatmap works with/without overlay ✓
+- Force vector arrow overlay works with all parameters ✓
+- Original image not modified (proper copying) ✓
+
+**Files created/modified**:
+- [vistac_sdk/viz_utils.py](vistac_sdk/viz_utils.py) - Updated (171 lines, +110 lines)
+- [tests/test_viz_utils.py](tests/test_viz_utils.py) - New test suite (233 lines)
 
 ### 9. Update Live Viewer App
 **File**: `apps/live_viewer.py`
