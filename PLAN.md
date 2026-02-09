@@ -582,15 +582,33 @@ if 'force_field' in outputs and not self._force_enabled:
 - Coordinate system: Fz=normal (into sensor), Fx=horizontal, Fy=vertical
 - GPU/CPU auto-detection with fallback warning
 
-### 4. Refactor Depth Reconstruction
+### 4. Refactor Depth Reconstruction ✅ COMPLETE
 **File**: `vistac_sdk/vistac_reconstruct.py`
 
-**Changes**:
-- Rename `Reconstructor` → `DepthEstimator`
-- Remove threading logic (moved to processor level)
-- Standardize return format to dict
-- Add `estimate(image, mode)` dispatcher
-- Keep core: BGRXY→MLP→gradients→Poisson→depth/pointcloud pipeline
+**Status**: COMPLETE (February 9, 2026)
+
+**What was done**:
+- Renamed `Reconstructor` → `DepthEstimator` class
+- Removed all threading logic (moved to processor level)
+- Added `estimate(image, outputs=['depth'], ppmm=...)` dispatcher method
+- Returns dict format: `{'depth': ndarray, 'gradient': ndarray, 'pointcloud': ndarray, 'mask': ndarray}`
+- Removed deprecated backward compatibility code (full refactoring)
+- Kept core pipeline: BGRXY→MLP→gradients→Poisson→depth/pointcloud
+- Old methods still available: `get_depth()`, `get_gradient()`, `get_point_cloud()`
+- Comprehensive test suite: 16 tests, all passing ✓
+
+**Deviations from plan**:
+- **No backward compatibility**: Removed `Reconstructor` alias completely (clean refactoring)
+- **No warnings module**: Not needed without deprecation warnings
+
+**Verification**:
+- All 16 unit tests passed ✓
+- Test coverage: initialization, estimate() method, multiple outputs, old methods
+- Dict return format works correctly for all output types
+
+**Files created/modified**:
+- [vistac_sdk/vistac_reconstruct.py](vistac_sdk/vistac_reconstruct.py) - Refactored (340 lines, removed threading)
+- [tests/test_depth_estimator.py](tests/test_depth_estimator.py) - New test suite (309 lines)
 
 ### 5. Create Unified Processor
 **File**: `vistac_sdk/tactile_processor.py`

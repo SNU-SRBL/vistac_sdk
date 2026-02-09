@@ -1,7 +1,6 @@
-import time
 import math
 import os
-import threading
+import warnings
 
 import cv2
 import numpy as np
@@ -32,40 +31,36 @@ class BGRXYMLPNet(nn.Module):
         return x
 
 
-class Reconstructor:
+class DepthEstimator:
     """
-    The GelSight reconstruction class.
+    The GelSight depth reconstruction class.
 
     This class handles 3D reconstruction from calibrated GelSight images.
-
     It uses a pre-trained neural network to predict gradients from BGRXY features,
+    then integrates them using Poisson solver to obtain depth maps and point clouds.
     """
 
-    def __init__(self, model_path, contact_mode="standard", device="cuda", thread=False):
-        '''
-        Initialize the Reconstructor. 
-        :param model_path: str; path to the model file.
-        :param contact_mode: str; the contact mode, can be "standard" or "flat".
-        :param device: str; the device to run the model on, can be "cuda" or "cpu".
-        :param thread: bool; whether to run the model in a background thread.
-        '''
+    def __init__(self, model_path, contact_mode="standard", device="cuda"):
+        """
+        Initialize the DepthEstimator.
+        
+        Args:
+            model_path: str; path to the model file.
+            contact_mode: str; the contact mode, can be "standard" or "flat".
+            device: str; the device to run the model on, can be "cuda" or "cpu".
+        """
         self.model_path = model_path
         self.contact_mode = contact_mode
         self.device = device
         self.bg_image = None
+        
         # Load the gxy model
         if not os.path.isfile(model_path):
-            raise ValueError("Error opening %s, file does not exist" % model_path)
+            raise FileNotFoundError(f"Model file not found: {model_path}")
+        
         self.gxy_net = BGRXYMLPNet().to(self.device)
         self.gxy_net.load_state_dict(torch.load(model_path, map_location=self.device))
         self.gxy_net.eval()
-
-        self._threaded = thread
-        self._thread = None
-        self._running = False
-        self._input_frame = None
-        self._latest_result = None
-        self._lock = threading.Lock()
 
     def load_bg(self, bg_image):
         """
@@ -244,65 +239,87 @@ class Reconstructor:
             return pc, gray
         else:
             return pc
+
+    def estimate(self, image, outputs=['depth'], ppmm=None, 
+                 color_dist_threshold=15, height_threshold=0.2, 
+                 use_mask=True, refine_mask=True, 
+                 relative=False, relative_scale=1.0, 
+                 mask_only_pointcloud=False):
+        """
+        Estimate depth-related outputs from a GelSight image.
         
-    def start_thread(self, ppmm, mode="gradient", use_mask=True, refine_mask=True, relative=False, relative_scale=1.0, mask_only_pointcloud=False, color_dist_threshold=15, height_threshold=0.2):
+        Args:
+            image: np.array (H, W, 3); the gelsight image.
+            outputs: list of str; outputs to compute. Options: 'depth', 'gradient', 'pointcloud', 'mask'
+            ppmm: float; the pixel per mm (required).
+            color_dist_threshold: float; the color distance threshold for contact mask.
+            height_threshold: float; the height threshold for contact mask.
+            use_mask: bool; whether to use the contact mask.
+            refine_mask: bool; whether to refine the contact mask.
+            relative: bool; whether to normalize depth to the range [0, 1].
+            relative_scale: float; the scale for relative depth normalization.
+            mask_only_pointcloud: bool; if True, use only masked area for point cloud.
+            
+        Returns:
+            dict: Dictionary with requested outputs:
+                - 'depth': np.array (H, W) uint8, depth map in mm scaled to [0, 255]
+                - 'gradient': np.array (H, W, 2) float32, gradient angles
+                - 'pointcloud': np.array (N, 3) float32, XYZ in meters
+                - 'mask': np.array (H, W) bool, contact mask
         """
-        Start a background thread to continuously process images.
-        :param ppmm: float; the pixel per mm.
-        :param mode: str; the processing mode {"gradient", "depth", "pointcloud"}.
-        :param use_mask: bool; whether to use the contact mask.
-        :param refine_mask: bool; whether to refine the contact mask.
-        :param relative: bool; whether to normalize depth to the range [0, 1].
-        :param relative_scale: float; the scale for relative depth normalization.
-        :param mask_only_pointcloud: bool; if True, use only masked area for point cloud.
-        :param color_dist_threshold: float; the color distance threshold for contact mask.
-        :param height_threshold: float; the height threshold for contact mask.
-        """
-        if self._threaded:
-            self._running = True
-            self._ppmm = ppmm
-            self._mode = mode
-            self._use_mask = use_mask
-            self._refine_mask = refine_mask
-            self._relative = relative
-            self._relative_scale = relative_scale
-            self._mask_only = mask_only_pointcloud
-            self._color_dist_threshold = color_dist_threshold
-            self._height_threshold = height_threshold
-            self._thread = threading.Thread(target=self._thread_loop, daemon=True)
-            self._thread.start()
-
-    def _thread_loop(self):
-        while self._running:
-            with self._lock:
-                frame = self._input_frame
-            if frame is not None:
-                if self._mode == "gradient":
-                    result = self.get_gradient(frame, self._ppmm, color_dist_threshold=self._color_dist_threshold, height_threshold=self._height_threshold, use_mask=self._use_mask, refine_mask=self._refine_mask)
-                elif self._mode == "depth":
-                    result = self.get_depth(frame, self._ppmm, color_dist_threshold=self._color_dist_threshold, height_threshold=self._height_threshold, use_mask=self._use_mask, refine_mask=self._refine_mask, relative=self._relative, relative_scale=self._relative_scale)
-                elif self._mode == "pointcloud":
-                    result = self.get_point_cloud(frame, self._ppmm, color_dist_threshold=self._color_dist_threshold, height_threshold=self._height_threshold, use_mask=self._use_mask, refine_mask=self._refine_mask, return_color=False, mask_only_pointcloud=self._mask_only)
-                with self._lock:
-                    self._latest_result = result
-            time.sleep(0.001)
-
-    def set_input_frame(self, frame):
-        if self._threaded:
-            with self._lock:
-                self._input_frame = frame
-
-    def get_latest_result(self):
-        if self._threaded:
-            with self._lock:
-                return self._latest_result.copy() if self._latest_result is not None else None
-        else:
-            raise RuntimeError("Not running in threaded mode")
-
-    def stop_thread(self):
-        self._running = False
-        if self._thread is not None:
-            self._thread.join()
+        if ppmm is None:
+            raise ValueError("ppmm (pixels per mm) must be provided")
+        
+        result = {}
+        
+        # Get surface info (shared computation)
+        G, H, C = self.get_surface_info(image, ppmm, color_dist_threshold, height_threshold)
+        
+        if refine_mask:
+            C = refine_contact_mask(C)
+        
+        # Compute requested outputs
+        if 'gradient' in outputs:
+            gradient = G.copy()
+            if use_mask:
+                masked_G = np.zeros_like(gradient)
+                masked_G[C != 0] = gradient[C != 0]
+                gradient = masked_G
+            result['gradient'] = gradient
+        
+        if 'depth' in outputs:
+            depth = -H / ppmm  # Convert height map to depth in millimeters
+            
+            if use_mask:
+                masked_depth = np.zeros_like(depth)
+                masked_depth[C != 0] = depth[C != 0]
+                depth = masked_depth
+            
+            if relative:
+                depth *= relative_scale
+                depth = np.clip(depth, 0, 1)
+            
+            depth_map = (depth * 255).astype(np.uint8)
+            result['depth'] = depth_map
+        
+        if 'pointcloud' in outputs:
+            pc = height2pointcloud(H, ppmm)
+            
+            mask_flat = C.ravel()
+            if use_mask:
+                if mask_only_pointcloud:
+                    pc = pc[mask_flat]
+                else:
+                    pc_bg = pc.copy()
+                    pc_bg[~mask_flat, 2] = 0.0
+                    pc = pc_bg
+            
+            result['pointcloud'] = pc
+        
+        if 'mask' in outputs:
+            result['mask'] = C
+        
+        return result
 
 
 def image2bgrxys(image):
