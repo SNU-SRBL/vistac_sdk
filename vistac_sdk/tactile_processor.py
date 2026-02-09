@@ -278,9 +278,13 @@ class TactileProcessor:
         Args:
             frame: [H, W, 3] BGR image (uint8)
             timestamp: Optional timestamp for force temporal tracking
+        
+        Note:
+            Assumes caller provides fresh frame (not reused buffer).
+            Camera.get_image() already returns isolated array, so no copy needed.
         """
         with self._lock:
-            self._latest_frame = frame.copy()
+            self._latest_frame = frame
             self._latest_timestamp = timestamp
     
     def get_latest_result(self) -> Dict[str, Union[np.ndarray, Dict, None]]:

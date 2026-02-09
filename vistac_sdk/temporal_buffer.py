@@ -10,6 +10,10 @@ from collections import deque
 from typing import Optional, Tuple
 import numpy as np
 
+# Default buffer configuration
+DEFAULT_MAX_BUFFER_SIZE = 60  # At 60 FPS with stride=5, provides ~1 second of history
+DEFAULT_TEMPORAL_STRIDE = 5  # At 60 FPS, stride=5 ≈ 83ms temporal window
+
 
 class TemporalBuffer:
     """Circular buffer for managing temporal frame pairs.
@@ -25,10 +29,8 @@ class TemporalBuffer:
     - Warmup period (returns None until sufficient frames available)
     
     Args:
-        max_size: Maximum number of frames to store (default: 60)
-                  At 60 FPS with stride=5, this provides ~1 second of history
-        stride: Number of frames between temporal pairs (default: 5)
-                At 60 FPS, stride=5 ≈ 83ms temporal window
+        max_size: Maximum number of frames to store
+        stride: Number of frames between temporal pairs
     
     Example:
         >>> buffer = TemporalBuffer(max_size=60, stride=5)
@@ -43,12 +45,12 @@ class TemporalBuffer:
         >>> frame_t, frame_t_minus_5 = buffer.get_pair()  # Returns valid pair
     """
     
-    def __init__(self, max_size: int = 60, stride: int = 5):
+    def __init__(self, max_size: int = DEFAULT_MAX_BUFFER_SIZE, stride: int = DEFAULT_TEMPORAL_STRIDE):
         """Initialize temporal buffer.
         
         Args:
-            max_size: Maximum buffer size (default: 60 frames)
-            stride: Temporal stride for frame pairs (default: 5 frames)
+            max_size: Maximum buffer size
+            stride: Temporal stride for frame pairs
         """
         if max_size < 1:
             raise ValueError(f"max_size must be >= 1, got {max_size}")

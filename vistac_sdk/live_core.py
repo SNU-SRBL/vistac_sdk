@@ -8,6 +8,11 @@ from vistac_sdk.vistac_reconstruct import DepthEstimator
 from vistac_sdk.tactile_processor import TactileProcessor
 from vistac_sdk.utils import load_config
 
+# Background collection constants
+BG_COLLECTION_FRAMES = 10  # Number of frames to average for background
+BG_COLLECTION_DELAY_SEC = 0.2  # Delay between frames to allow camera auto-exposure
+CAMERA_POLL_INTERVAL_SEC = 0.01  # Polling interval when waiting for valid frame
+
 
 class LiveTactileProcessor:
     """
@@ -118,17 +123,21 @@ class LiveTactileProcessor:
             contact_mode='standard',
         )
         
-        # Collect background (average 10 frames)
+        # Collect fresh background at runtime (average multiple frames)
+        # This adapts to current lighting conditions, sensor aging, etc.
+        # Note: Saved background.png files are only used for offline calibration/training
         print(f"Collecting background for sensor {serial}...")
         bg_images = []
-        for _ in range(10):
-            time.sleep(0.2)
+        for _ in range(BG_COLLECTION_FRAMES):
+            time.sleep(BG_COLLECTION_DELAY_SEC)
             frame = self.camera.get_image()
             while frame is None:
-                time.sleep(0.01)
+                time.sleep(CAMERA_POLL_INTERVAL_SEC)
                 frame = self.camera.get_image()
             bg_images.append(frame)
         bg_image = np.mean(bg_images, axis=0).astype(np.uint8)
+        
+        # Load same background into both depth and force estimators
         self.processor.load_background(bg_image)
         print(f"Background collected for sensor {serial}")
         
