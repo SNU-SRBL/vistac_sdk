@@ -885,12 +885,42 @@ if 'force_field' in outputs and not self._force_enabled:
 **Files modified**:
 - [ros2/tactile_streamer_node.py](ros2/tactile_streamer_node.py) - Added force support (+60 lines, 274 lines total)
 
-### 11. Update ROS2 Launch File
+### 11. Update ROS2 Launch File ✅ COMPLETE
 **File**: `ros2/launch/multi_sensor_tactile_streamer.launch.py`
 
-- Add launch args: `enable_depth`, `enable_force`, `temporal_stride`, `outputs`
-- Pass to all sensor nodes
-- Default: depth only (backward compatibility)
+**Status**: COMPLETE (February 9, 2026)
+
+**What was done**:
+- Added new force estimation launch arguments:
+  - `enable_force` (default: false)
+  - `temporal_stride` (default: 5)
+  - `outputs` (default: empty string, parsed to list)
+- Added configurable pointcloud parameters (previously hardcoded):
+  - `refine_mask` (default: true)
+  - `relative` (default: false)
+  - `mask_only_pointcloud` (default: false)
+  - `return_color` (default: false)
+  - `height_threshold` (default: 0.2)
+- Updated documentation to include new force modes (force_field, force_vector)
+- Added usage examples for force estimation and combined outputs
+- All parameters now passed to sensor nodes
+- Backward compatible (defaults to depth-only mode)
+- Supports simultaneous pointcloud + force estimation with full parameter control
+
+**Deviations from plan**:
+- Did not add `enable_depth` parameter (not needed - depth enabled by default in LiveTactileProcessor)
+- `outputs` parameter accepts comma-separated string, parsed to array in launch_setup function
+- **Additional enhancement**: Made pointcloud parameters configurable (user request, improves usability)
+
+**Verification**:
+- Syntax check passed ✓
+- All new parameters properly declared ✓
+- Default values maintain backward compatibility ✓
+- Parameters passed to all sensor nodes ✓
+- Pointcloud + force estimation work simultaneously ✓
+
+**Files modified**:
+- [ros2/launch/multi_sensor_tactile_streamer.launch.py](ros2/launch/multi_sensor_tactile_streamer.launch.py) - Added force and pointcloud parameters (+40 lines, 165 lines total)
 
 ### 12. Update Sensor Configs
 **Files**: `sensors/{serial}/{serial}.yaml`

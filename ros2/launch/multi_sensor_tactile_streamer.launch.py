@@ -10,16 +10,28 @@ Each node streams tactile data from a specified sensor serial number and publish
 
 Launch Arguments:
 - sensors_root: Root directory for sensor configurations
-- mode: Processing mode (depth, gradient, pointcloud) 
+- mode: Processing mode (depth, gradient, pointcloud, force_field, force_vector) 
 - model_device: Device for model execution (cuda, cpu)
 - use_mask: Whether to apply contact mask
 - rate: Publishing rate in Hz
 - contact_mode: Contact detection mode (standard, flat)
+- enable_force: Enable force estimation using Sparsh models (default: false)
+- temporal_stride: Temporal stride for force estimation (default: 5)
+- outputs: Explicit list of outputs (comma-separated, overrides mode)
+- refine_mask: Refine contact mask edges (default: true)
+- relative: Use relative depth instead of absolute (default: false)
+- mask_only_pointcloud: Only include masked region in pointcloud (default: false)
+- return_color: Include RGB color in pointcloud (default: false)
+- height_threshold: Contact detection height threshold in mm (default: 0.2)
 
 Usage Examples:
 ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py mode:=depth
 ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py mode:=pointcloud model_device:=cpu
 ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py sensors_root:=/path/to/sensors
+ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py enable_force:=true mode:=force_vector
+ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py outputs:=depth,force_field,force_vector
+ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py outputs:=pointcloud,force_field return_color:=true
+ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py mode:=pointcloud mask_only_pointcloud:=true height_threshold:=0.3
 '''
 
 def launch_setup(context, *args, **kwargs):
@@ -30,6 +42,17 @@ def launch_setup(context, *args, **kwargs):
     use_mask = LaunchConfiguration('use_mask').perform(context) == 'true'
     rate = float(LaunchConfiguration('rate').perform(context))
     contact_mode = LaunchConfiguration('contact_mode').perform(context)
+    enable_force = LaunchConfiguration('enable_force').perform(context) == 'true'
+    temporal_stride = int(LaunchConfiguration('temporal_stride').perform(context))
+    outputs_str = LaunchConfiguration('outputs').perform(context)
+    outputs = [s.strip() for s in outputs_str.split(',')] if outputs_str else []
+    
+    # Pointcloud-specific parameters
+    refine_mask = LaunchConfiguration('refine_mask').perform(context) == 'true'
+    relative = LaunchConfiguration('relative').perform(context) == 'true'
+    mask_only_pointcloud = LaunchConfiguration('mask_only_pointcloud').perform(context) == 'true'
+    return_color = LaunchConfiguration('return_color').perform(context) == 'true'
+    height_threshold = float(LaunchConfiguration('height_threshold').perform(context))
     
     # Auto-discover sensors from sensors_root directory
     sensors = []
@@ -61,16 +84,19 @@ def launch_setup(context, *args, **kwargs):
                 "contact_mode": contact_mode,
                 "model_device": model_device,
                 "use_mask": use_mask,
-                "refine_mask": True,
-                "relative": False,
+                "refine_mask": refine_mask,
+                "relative": relative,
                 "relative_scale": 1.0,
-                "mask_only_pointcloud": False,
-                "return_color": False,
+                "mask_only_pointcloud": mask_only_pointcloud,
+                "return_color": return_color,
                 "color_dist_threshold": 15,
-                "height_threshold": 0.2,
+                "height_threshold": height_threshold,
                 "topic": topic_name,
                 "rate": rate,
-                "verbose": True
+                "verbose": True,
+                "enable_force": enable_force,
+                "temporal_stride": temporal_stride,
+                "outputs": outputs
             }],
         )
         nodes.append(node)
@@ -108,6 +134,46 @@ def generate_launch_description():
             'contact_mode',
             default_value='standard',
             description='Contact detection mode: standard or flat'
+        ),
+        DeclareLaunchArgument(
+            'enable_force',
+            default_value='false',
+            description='Enable force estimation using Sparsh models (requires models to be downloaded)'
+        ),
+        DeclareLaunchArgument(
+            'temporal_stride',
+            default_value='5',
+            description='Temporal stride for force estimation (number of frames between temporal pairs)'
+        ),
+        DeclareLaunchArgument(
+            'outputs',
+            default_value='',
+            description='Comma-separated list of outputs (e.g., depth,force_field,force_vector). Overrides mode if specified.'
+        ),
+        DeclareLaunchArgument(
+            'refine_mask',
+            default_value='true',
+            description='Refine contact mask edges for smoother boundaries'
+        ),
+        DeclareLaunchArgument(
+            'relative',
+            default_value='false',
+            description='Use relative depth measurement instead of absolute'
+        ),
+        DeclareLaunchArgument(
+            'mask_only_pointcloud',
+            default_value='false',
+            description='Only include masked (contact) region in pointcloud output'
+        ),
+        DeclareLaunchArgument(
+            'return_color',
+            default_value='false',
+            description='Include RGB color information in pointcloud (creates PointCloud2 with color fields)'
+        ),
+        DeclareLaunchArgument(
+            'height_threshold',
+            default_value='0.2',
+            description='Height threshold in mm for contact detection'
         ),
         
         # Use OpaqueFunction to handle dynamic node creation
