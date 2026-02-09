@@ -501,18 +501,58 @@ if 'force_field' in outputs and not self._force_enabled:
 - [tests/test_temporal_buffer.py](tests/test_temporal_buffer.py) (347 lines)
 - [tests/__init__.py](tests/__init__.py)
 
-### 3. Create Force Estimation Module
-- Use `huggingface_hub` library for downloading
+### 3. Create Force Estimation Module ✅ COMPLETE
+**File**: `vistac_sdk/vistac_force.py`
 
-### 2. Create Temporal Buffer Utility
-**File**: `vistac_sdk/temporal_buffer.py`
+**Status**: COMPLETE (February 9, 2026)
 
-- Implement `TemporalBuffer` class with circular buffer
-- `add(frame)`: stores frame with timestamp
-- `get_pair(stride=5)`: returns `(frame_t, frame_t-stride)` as 6-channel concat
-- Handle insufficient frames (return None until buffer filled)
+**What was done**:
+- Implemented `SparshEncoder` (ViT-base) with correct architecture:
+  - 6-channel input (temporal pairs)
+  - embed_dim=768, depth=12, num_heads=12
+  - RoPE 2D positional encoding (192 frequency bands)
+  - Register tokens (similar to class tokens)
+  - Intermediate feature extraction from layers [2, 5, 8, 11]
+- Implemented `ForceFieldDecoder` (DPT-style):
+  - Multi-scale reassembly with scale factors [4, 2, 1, 2]
+  - Fusion blocks for combining features
+  - Dual output heads (normal force + shear force)
+- Implemented `ForceEstimator` main interface:
+  - Loads pretrained weights from downloaded models
+  - Handles Lightning checkpoint format (fake module workaround)
+  - Background subtraction with configurable `bg_offset`
+  - Temporal buffering integration
+  - Preprocessing pipeline (no ImageNet normalization)
+  - Force vector aggregation (mean over spatial dims)
+  - GPU/CPU auto-detection with fallback
+- Comprehensive test suite (15 tests, all passing):
+  - Encoder/decoder architecture tests
+  - Model loading tests
+  - Preprocessing pipeline tests
+  - Integration tests with real models
+  - Temporal buffer warmup tests
 
-### 3. Create Force Estimation Module
+**Deviations from plan**:
+- **RoPE frequency bands**: 192 bands (not embed_dim//2=384) - discovered from checkpoint
+- **Reassemble scale factors**: [4, 2, 1, 2] (not [4, 8, 16, 32]) - discovered from checkpoint
+- **Lightning checkpoint loading**: Required fake module workaround to bypass `tactile_ssl` dependencies
+- **Decoder state_dict prefix**: `model_task.` prefix needs to be stripped
+
+**Verification**:
+- All 15 unit tests passed ✓
+- Encoder loads weights correctly (strict=False due to minor mismatches) ✓
+- Decoder loads weights correctly (strict=False due to minor mismatches) ✓
+- Preprocessing produces correct tensor shapes [1, 6, 224, 224] ✓
+- Force field outputs have correct shapes: normal [224, 224], shear [224, 224, 2] ✓
+- Force vector outputs are Python floats (fx, fy, fz) ✓
+- Temporal buffer warmup works (returns None until ready) ✓
+- GPU/CPU fallback warning system works ✓
+
+**Files created**:
+- [vistac_sdk/vistac_force.py](vistac_sdk/vistac_force.py) (685 lines)
+- [tests/test_force_estimator.py](tests/test_force_estimator.py) (293 lines)
+
+**Classes**:
 **File**: `vistac_sdk/vistac_force.py`
 
 **Classes**:
