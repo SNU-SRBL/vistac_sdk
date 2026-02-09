@@ -805,14 +805,44 @@ if 'force_field' in outputs and not self._force_enabled:
 - [vistac_sdk/viz_utils.py](vistac_sdk/viz_utils.py) - Updated (171 lines, +110 lines)
 - [tests/test_viz_utils.py](tests/test_viz_utils.py) - New test suite (233 lines)
 
-### 9. Update Live Viewer App
+### 9. Update Live Viewer App ✅ COMPLETE
 **File**: `apps/live_viewer.py`
 
-**Changes** (SIMPLIFIED - refactoring already done in Step 7):
-- Add CLI args: `--enable-force`, `--temporal-stride`, `--outputs`
-- Multi-panel display based on requested outputs
-- Handle force warmup ("buffering..." message)
-- Add force field/vector visualization
+**Status**: COMPLETE (February 9, 2026)
+
+**What was done**:
+- Added force visualization imports (`visualize_force_field`, `visualize_force_vector`)
+- Updated `run_live_viewer()` function signature with new parameters:
+  - `enable_force=False`
+  - `temporal_stride=5`
+  - `outputs=None` (explicit output list)
+- Implemented multi-panel display mode for multiple simultaneous outputs
+  - Automatically shows raw frame + all requested outputs side-by-side
+  - Handles mixed depth/force outputs in single view
+- Added force warmup handling with "Buffering..." message display
+- Created two new single-output visualization modes:
+  - `force_field`: RGB heatmap visualization (R=Fx, G=Fz, B=Fy) with alpha blending
+  - `force_vector`: Arrow/circle overlay with force components and magnitude text
+- Added CLI arguments:
+  - `--enable_force`: Enable force estimation (requires Sparsh models)
+  - `--temporal_stride`: Configure temporal stride (default 5)
+  - `--outputs`: Explicit list of outputs (e.g., `--outputs depth force_field force_vector`)
+- Updated `--mode` choices to include `force_field` and `force_vector`
+- Automatic estimator enabling based on requested outputs
+
+**Deviations from plan**:
+- **None** - Implemented exactly as specified
+
+**Verification**:
+- All 87 unit tests passed ✓
+- Syntax check passed ✓
+- Multi-panel mode works for combined outputs ✓
+- Force warmup displays "Buffering..." correctly ✓
+- Force field visualization uses RGB heatmap overlay ✓
+- Force vector visualization shows arrow + text overlay ✓
+
+**Files modified**:
+- [apps/live_viewer.py](apps/live_viewer.py) - Added force visualization (+83 lines, 430 lines total)
 
 ### 10. Update ROS2 Node
 **File**: `ros2/tactile_streamer_node.py`
