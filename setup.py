@@ -20,7 +20,11 @@ setup(
         "nanogui",
         "open3d>=0.17.0",
         "scikit-learn>=1.3.0",
-        "tqdm>=4.65.0"
+        "tqdm>=4.65.0",
+        # Force estimation dependencies (Sparsh)
+        "einops>=0.6",
+        "timm>=0.9",
+        "huggingface_hub>=0.19",
     ],
     python_requires=">=3.9",
     entry_points={

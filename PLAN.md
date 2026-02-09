@@ -955,20 +955,44 @@ if 'force_field' in outputs and not self._force_enabled:
 - [sensors/D21273/D21273.yaml](sensors/D21273/D21273.yaml) - Added force config section
 - [sensors/D21275/D21275.yaml](sensors/D21275/D21275.yaml) - Added force config section
 
-### 13. Update Dependencies
+### 13. Update Dependencies ✅ COMPLETE
 **Files**: `setup.py`, `requirements.txt`, `package.xml`
 
-**Add**:
-- `torch>=2.0,<3.0`
-- `torchvision>=0.15`
-- `einops>=0.6`
-- `timm>=0.9`
-- `huggingface_hub>=0.19`
-- `xformers` (optional, for memory-efficient attention)
+**Status**: COMPLETE (February 9, 2026)
 
-**Update**: Python `>=3.9`
+**What was done**:
+- Updated `setup.py` to add force estimation dependencies:
+  - `einops>=0.6` (tensor operations for vision transformers)
+  - `timm>=0.9` (PyTorch image models library)
+  - `huggingface_hub>=0.19` (model download from HuggingFace)
+- Created `requirements.txt` with all dependencies (16 packages total)
+  - Included optional xformers comment for GPU memory optimization
+  - Organized by category (core, deep learning, force estimation)
+- Verified `package.xml` already has required ROS2 dependencies
+  - `geometry_msgs` present (needed for WrenchStamped)
+  - No changes needed
+- Existing dependencies already satisfy requirements:
+  - `torch>=2.1.0` (exceeds minimum >=2.0) ✓
+  - `torchvision>=0.16.0` (exceeds minimum >=0.15) ✓
+  - `python_requires=">=3.9"` already set ✓
 
-**Note**: Exact versions from Sparsh `environment.yml` may differ
+**Deviations from plan**:
+- Used `torch>=2.1.0` instead of `>=2.0,<3.0` (more specific, already present)
+- Used `torchvision>=0.16.0` instead of `>=0.15` (more specific, already present)
+- Left xformers as optional comment (not required dependency)
+
+**Verification**:
+- setup.py passes Python syntax validation ✓
+- requirements.txt contains 16 packages ✓
+- All 3 new packages (einops, timm, huggingface_hub) available on PyPI ✓
+- package.xml is valid XML ✓
+- package.xml contains geometry_msgs dependency ✓
+- huggingface_hub already installed (v1.4.1) ✓
+
+**Files created/modified**:
+- [setup.py](setup.py) - Added 3 force estimation packages (+3 lines)
+- [requirements.txt](requirements.txt) - Created new file (26 lines)
+- package.xml - No changes (already has required ROS2 dependencies)
 
 ### 14. Update Main README
 **File**: `README.md`
