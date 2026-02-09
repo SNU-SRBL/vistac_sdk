@@ -694,18 +694,64 @@ if 'force_field' in outputs and not self._force_enabled:
 - Force buffer warmup handling
 - Thread-safe locks with outputs copied under lock to prevent race conditions
 
-### 6. Update Live API
+### 6. Update Live API ✅ COMPLETE
 **File**: `vistac_sdk/live_core.py`
 
-**Changes**:
-- **REPLACES temporary Step 4 fix**: Complete rewrite of `LiveReconstructor` → `LiveTactileProcessor`
-- Use new `TactileProcessor` (combines DepthEstimator + ForceEstimator)
-- Add constructor params: `enable_depth=True`, `enable_force=False`, `temporal_stride=5`
-- Update `get_latest_output()` → returns `(frame, result_dict)` where result_dict contains requested outputs
-- Keep background collection logic (average 10 frames)
-- Threading moved to TactileProcessor level (remove from LiveTactileProcessor)
+**Status**: COMPLETE (February 9, 2026)
 
-### 7. Update Visualization Utilities
+**What was done**:
+- Implemented `LiveTactileProcessor` class (169 lines):
+  - Uses unified `TactileProcessor` internally
+  - Parameters: `enable_depth=True`, `enable_force=False`, `temporal_stride=5`, `bg_offset=0.5`
+  - Supports selective `outputs` parameter
+  - Background collection (10 frames averaged)
+  - Threading delegated to TactileProcessor
+  - Returns `(frame, result_dict)` format
+- Implemented `LiveReconstructor` backward compatibility wrapper (114 lines):
+  - Wraps LiveTactileProcessor for legacy code
+  - Converts dict format → single array format
+  - Shows deprecation warning
+  - Force estimation always disabled
+  - Exposes `.device`, `.estimator`, `.ppmm` for compatibility
+
+**Deviations from plan**:
+- Added backward compatibility wrapper (will be removed in Step 7)
+
+**Verification**:
+- All 68 tests passing ✓
+- LiveTactileProcessor imports successfully ✓
+- LiveReconstructor imports successfully (deprecated) ✓
+- `apps/live_viewer.py` imports successfully ✓
+- `ros2/tactile_streamer_node.py` imports successfully ✓
+
+**Files created/modified**:
+- [vistac_sdk/live_core.py](vistac_sdk/live_core.py) - Complete rewrite (281 lines)
+
+### 7. Remove Backward Compatibility (Full Refactoring)
+**Files**: `vistac_sdk/live_core.py`, `apps/live_viewer.py`, `ros2/tactile_streamer_node.py`
+
+**Rationale**: Steps 8-9 already plan to update apps/ROS2, so no benefit to keeping temporary wrapper.
+
+**Changes to live_core.py**:
+- Delete `LiveReconstructor` class entirely
+- Keep only `LiveTactileProcessor`
+- Clean, optimized structure
+
+**Changes to apps/live_viewer.py**:
+- Replace `LiveReconstructor` → `LiveTactileProcessor`
+- Update to use dict return format: `frame, result = proc.get_latest_output()`
+- Extract outputs: `depth = result.get('depth')`
+- (This was planned for Step 8 anyway)
+
+**Changes to ros2/tactile_streamer_node.py**:
+- Replace `LiveReconstructor` import → `LiveTactileProcessor`
+- Update class usage throughout node
+- Update to dict format
+- (This was planned for Step 9 anyway)
+
+**Result**: Clean codebase with best optimized structure, Steps 8-9 simplified to just add force features
+
+### 8. Update Visualization Utilities
 **File**: `vistac_sdk/viz_utils.py`
 
 **New functions**:
@@ -715,27 +761,23 @@ if 'force_field' in outputs and not self._force_enabled:
 **Updates**:
 - Update `plot_gradients()` to accept dict format
 
-### 8. Update Live Viewer App
+### 9. Update Live Viewer App
 **File**: `apps/live_viewer.py`
 
-**Changes**:
-- Add CLI args: `--outputs`, `--enable-depth`, `--enable-force`, `--temporal-stride`
-- Use `LiveTactileProcessor`
+**Changes** (SIMPLIFIED - refactoring already done in Step 7):
+- Add CLI args: `--enable-force`, `--temporal-stride`, `--outputs`
 - Multi-panel display based on requested outputs
 - Handle force warmup ("buffering..." message)
+- Add force field/vector visualization
 
-### 9. Update ROS2 Node
+### 10. Update ROS2 Node
 **File**: `ros2/tactile_streamer_node.py`
 
-**Changes**:
-- Replace `LiveReconstructor` import with `LiveTactileProcessor`
-- Update class usage throughout node
-
-**New parameters**:
-- `enable_depth` (bool, default True)
-- `enable_force` (bool, default False)
-- `temporal_stride` (int, default 5)
-- `outputs` (string list, default ['depth'])
+**Changes** (SIMPLIFIED - refactoring already done in Step 7):
+- Add ROS2 parameters:
+  - `enable_force` (bool, default False)
+  - `temporal_stride` (int, default 5)
+  - `outputs` (string list, default ['depth'])
 
 **Publishing**:
 - Depth: `sensor_msgs/Image` mono8 → `/tactile/{serial}/depth`
@@ -747,14 +789,14 @@ if 'force_field' in outputs and not self._force_enabled:
   - Populate `wrench.force` = [Fx, Fy, Fz], set `wrench.torque` = [0, 0, 0]
   - Standard message type for force/torque sensors in ROS ecosystem
 
-### 10. Update ROS2 Launch File
+### 11. Update ROS2 Launch File
 **File**: `ros2/launch/multi_sensor_tactile_streamer.launch.py`
 
 - Add launch args: `enable_depth`, `enable_force`, `temporal_stride`, `outputs`
 - Pass to all sensor nodes
 - Default: depth only (backward compatibility)
 
-### 11. Update Sensor Configs
+### 12. Update Sensor Configs
 **Files**: `sensors/{serial}/{serial}.yaml`
 
 **Add optional section**:
@@ -767,7 +809,7 @@ force:
   bg_offset: 0.5  # Background subtraction offset
 ```
 
-### 12. Update Dependencies
+### 13. Update Dependencies
 **Files**: `setup.py`, `requirements.txt`, `package.xml`
 
 **Add**:
@@ -782,7 +824,7 @@ force:
 
 **Note**: Exact versions from Sparsh `environment.yml` may differ
 
-### 13. Update Main README
+### 14. Update Main README
 **File**: `README.md`
 
 **Add**:
@@ -792,7 +834,7 @@ force:
 - Selective outputs API documentation
 - GPU recommendation note
 
-### 14. Update Package Init
+### 15. Update Package Init
 **File**: `vistac_sdk/__init__.py`
 
 **Export new classes**:
@@ -805,7 +847,7 @@ force:
 **Backward compatibility** (OPTIONAL - not needed since we're doing full refactoring):
 - Could add: `Reconstructor = DepthEstimator` (with deprecation warning)
 - Could add: `LiveReconstructor = LiveTactileProcessor` (with deprecation warning)
-- **Decision**: Skip backward compatibility aliases since all code updated in Steps 6, 8, 9
+- **Decision**: Skip backward compatibility aliases since all code updated in Steps 7, 9, 10
 
 ## Verification Plan
 
