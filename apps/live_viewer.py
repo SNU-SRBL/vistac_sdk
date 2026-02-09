@@ -5,7 +5,7 @@ import numpy as np
 import open3d as o3d
 import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
-from vistac_sdk.live_core import LiveReconstructor
+from vistac_sdk.live_core import LiveTactileProcessor
 
 DEFAULT_SENSORS_ROOT = os.path.join(os.path.dirname(__file__), "../sensors")
 
@@ -61,11 +61,23 @@ def run_live_viewer(
     color_dist_threshold=15,
     height_threshold=0.2
 ):
-    recon = LiveReconstructor(
+    # Determine outputs based on mode
+    if mode == "depth":
+        outputs = ['depth']
+    elif mode == "gradient":
+        outputs = ['gradient']
+    elif mode == "pointcloud":
+        outputs = ['pointcloud']
+    else:
+        outputs = ['depth']
+    
+    processor = LiveTactileProcessor(
         serial=serial,
         sensors_root=sensors_root,
         model_device=device_type,
-        mode=mode,
+        enable_depth=True,
+        enable_force=False,
+        outputs=outputs,
         use_mask=use_mask,
         refine_mask=refine_mask,
         relative=relative,
@@ -74,16 +86,18 @@ def run_live_viewer(
         color_dist_threshold=color_dist_threshold,
         height_threshold=height_threshold
     )
-    device_type = recon.device_type
-    ppmm = recon.ppmm
+    device_type = processor.device_type
+    ppmm = processor.ppmm
 
     if mode == "depth":
         print("\nPress any key to quit.\n")
         while True:
-            frame, result = recon.get_latest_output()
-            if frame is None or result is None:
+            frame, result_dict = processor.get_latest_output()
+            if frame is None or not result_dict:
                 continue
-            depth_image = result
+            depth_image = result_dict.get('depth')
+            if depth_image is None:
+                continue
             depth_vis = cv2.resize(depth_image, (frame.shape[1], frame.shape[0]))
             depth_vis = cv2.cvtColor(depth_vis, cv2.COLOR_GRAY2BGR)
             if frame.ndim == 2:
@@ -96,15 +110,17 @@ def run_live_viewer(
             key = cv2.waitKey(1)
             if key != -1:
                 break
-        recon.release()
+        processor.release()
         cv2.destroyAllWindows()
     elif mode == "gradient":
         print("\nPress any key to quit.\n")
         while True:
-            frame, result = recon.get_latest_output()
-            if frame is None or result is None:
+            frame, result_dict = processor.get_latest_output()
+            if frame is None or not result_dict:
                 continue
-            G = recon.get_gradient(frame)
+            G = result_dict.get('gradient')
+            if G is None:
+                continue
             red = G[:, :, 0] * 255 / 3.0 + 127
             red = np.clip(red, 0, 255)
             blue = G[:, :, 1] * 255 / 3.0 + 127
@@ -121,7 +137,7 @@ def run_live_viewer(
             key = cv2.waitKey(1)
             if key != -1:
                 break
-        recon.release()
+        processor.release()
         cv2.destroyAllWindows()
     elif mode == "pointcloud":
         gui.Application.instance.initialize()
@@ -134,7 +150,11 @@ def run_live_viewer(
         def update_loop():
             if not running:
                 return
-            frame, pc = recon.get_latest_output()
+            frame, result_dict = processor.get_latest_output()
+            if not result_dict:
+                gui.Application.instance.post_to_main_thread(app.window, update_loop)
+                return
+            pc = result_dict.get('pointcloud')
             if pc is not None and frame is not None:
                 pc = pc * 1000.0  # to mm
                 colors = frame.reshape(-1, 3)[:, ::-1] / 255.0
@@ -143,7 +163,7 @@ def run_live_viewer(
         gui.Application.instance.post_to_main_thread(app.window, update_loop)
         print("\nClose the window to quit.\n")
         gui.Application.instance.run()
-        recon.release()
+        processor.release()
         gui.Application.instance.quit()
 
 if __name__ == "__main__":

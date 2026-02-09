@@ -727,29 +727,46 @@ if 'force_field' in outputs and not self._force_enabled:
 **Files created/modified**:
 - [vistac_sdk/live_core.py](vistac_sdk/live_core.py) - Complete rewrite (281 lines)
 
-### 7. Remove Backward Compatibility (Full Refactoring)
+### 7. Remove Backward Compatibility (Full Refactoring) ✅ COMPLETE
 **Files**: `vistac_sdk/live_core.py`, `apps/live_viewer.py`, `ros2/tactile_streamer_node.py`
 
-**Rationale**: Steps 8-9 already plan to update apps/ROS2, so no benefit to keeping temporary wrapper.
+**Status**: COMPLETE (February 9, 2026)
 
-**Changes to live_core.py**:
-- Delete `LiveReconstructor` class entirely
-- Keep only `LiveTactileProcessor`
-- Clean, optimized structure
+**What was done**:
+- **Removed LiveReconstructor from live_core.py**:
+  - Deleted 113 lines (entire LiveReconstructor class)
+  - File reduced from 281 → 168 lines
+  - Only LiveTactileProcessor remains (clean implementation)
+- **Updated apps/live_viewer.py**:
+  - Replaced `LiveReconstructor` → `LiveTactileProcessor`
+  - Updated to dict return format: `frame, result_dict = processor.get_latest_output()`
+  - **Fixed broken gradient mode**: Now extracts `G = result_dict.get('gradient')`
+    - Previously called non-existent `recon.get_gradient(frame)` method
+  - All modes (depth, gradient, pointcloud) use dict-based extraction
+  - File changed from 214 → 233 lines
+- **Updated ros2/tactile_streamer_node.py**:
+  - Replaced `LiveReconstructor` → `LiveTactileProcessor`
+  - Determines outputs based on mode
+  - Updated to dict format: `result = result_dict.get(self.mode)`
+  - Changed `self.recon` → `self.processor` throughout
+  - File changed from 197 → 213 lines
 
-**Changes to apps/live_viewer.py**:
-- Replace `LiveReconstructor` → `LiveTactileProcessor`
-- Update to use dict return format: `frame, result = proc.get_latest_output()`
-- Extract outputs: `depth = result.get('depth')`
-- (This was planned for Step 8 anyway)
+**Deviations from plan**:
+- **None** - Implemented exactly as specified
 
-**Changes to ros2/tactile_streamer_node.py**:
-- Replace `LiveReconstructor` import → `LiveTactileProcessor`
-- Update class usage throughout node
-- Update to dict format
-- (This was planned for Step 9 anyway)
+**Verification**:
+- All 68 unit tests passed ✓
+- LiveTactileProcessor imports successfully ✓
+- LiveReconstructor properly removed (ImportError when importing) ✓
 
-**Result**: Clean codebase with best optimized structure, Steps 8-9 simplified to just add force features
+**Files modified**:
+- [vistac_sdk/live_core.py](vistac_sdk/live_core.py) - Removed LiveReconstructor (-113 lines)
+- [apps/live_viewer.py](apps/live_viewer.py) - Updated to LiveTactileProcessor (+19 lines)
+- [ros2/tactile_streamer_node.py](ros2/tactile_streamer_node.py) - Updated to LiveTactileProcessor (+16 lines)
+
+**Critical fix**: Fixed gradient mode bug that was calling undefined method
+
+**Result**: Clean codebase with optimized structure. Steps 8-9 simplified to just add force-specific features.
 
 ### 8. Update Visualization Utilities
 **File**: `vistac_sdk/viz_utils.py`

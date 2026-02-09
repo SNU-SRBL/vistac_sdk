@@ -8,7 +8,7 @@ from cv_bridge import CvBridge
 import numpy as np
 import struct
 
-from vistac_sdk.live_core import LiveReconstructor
+from vistac_sdk.live_core import LiveTactileProcessor
 
 '''
 This ROS2 node streams tactile data from a sensor using the LiveReconstructor class.
@@ -77,13 +77,25 @@ class TactileStreamerNode(Node):
         self.mode = mode
         self.return_color = return_color
 
-        # Initialize LiveReconstructor with all parameters
+        # Determine outputs based on mode
+        if mode == 'depth':
+            outputs = ['depth']
+        elif mode == 'gradient':
+            outputs = ['gradient']
+        elif mode == 'pointcloud':
+            outputs = ['pointcloud']
+        else:
+            outputs = ['depth']
+
+        # Initialize LiveTactileProcessor with all parameters
         try:
-            self.recon = LiveReconstructor(
+            self.processor = LiveTactileProcessor(
                 serial=serial,
                 sensors_root=sensors_root,
                 model_device=model_device,
-                mode=mode,
+                enable_depth=True,
+                enable_force=False,
+                outputs=outputs,
                 use_mask=use_mask,
                 refine_mask=refine_mask,
                 relative=relative,
@@ -108,7 +120,12 @@ class TactileStreamerNode(Node):
         self.timer = self.create_timer(1.0 / rate, self.timer_callback)
 
     def timer_callback(self):
-        frame, result = self.recon.get_latest_output()
+        frame, result_dict = self.processor.get_latest_output()
+        if not result_dict:
+            return
+        
+        # Extract the result for the current mode
+        result = result_dict.get(self.mode)
         if result is None:
             return
             
@@ -181,7 +198,7 @@ class TactileStreamerNode(Node):
         return msg
 
     def destroy_node(self):
-        self.recon.release()
+        self.processor.release()
         super().destroy_node()
 
 def main(args=None):
