@@ -3,6 +3,7 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, PointCloud2, PointField
+from geometry_msgs.msg import WrenchStamped
 from std_msgs.msg import Header
 from cv_bridge import CvBridge
 import numpy as np
@@ -17,9 +18,12 @@ It publishes the data as Image or PointCloud2 messages on specified topics.
 Complete Parameters List:
 - serial: Sensor serial number (default: 'YOUR_SENSOR_SERIAL')
 - sensors_root: Root directory for sensor configurations (default: '../sensors') 
-- mode: Processing mode - 'depth', 'gradient', 'pointcloud' (default: 'depth')
+- mode: Processing mode - 'depth', 'gradient', 'pointcloud', 'force_field', 'force_vector' (default: 'depth')
 - contact_mode: Contact detection mode - 'standard' or 'flat' (default: 'standard')
 - model_device: Device for model execution - 'cuda' or 'cpu' (default: 'cuda')
+- enable_force: Enable force estimation (default: False)
+- temporal_stride: Temporal stride for force estimation (default: 5)
+- outputs: Explicit list of outputs to compute (default: None, determined by mode)
 - use_mask: Whether to apply contact mask (default: True)
 - refine_mask: Whether to refine contact mask (default: True)
 - relative: Whether to normalize depth to [0,1] (default: True)
@@ -43,6 +47,9 @@ class TactileStreamerNode(Node):
         self.declare_parameter('mode', 'depth')
         self.declare_parameter('contact_mode', 'standard') 
         self.declare_parameter('model_device', 'cuda')
+        self.declare_parameter('enable_force', False)
+        self.declare_parameter('temporal_stride', 5)
+        self.declare_parameter('outputs', [])
         self.declare_parameter('use_mask', True)
         self.declare_parameter('refine_mask', True)
         self.declare_parameter('relative', True)
@@ -61,6 +68,9 @@ class TactileStreamerNode(Node):
         mode = self.get_parameter('mode').get_parameter_value().string_value
         contact_mode = self.get_parameter('contact_mode').get_parameter_value().string_value
         model_device = self.get_parameter('model_device').get_parameter_value().string_value
+        enable_force = self.get_parameter('enable_force').get_parameter_value().bool_value
+        temporal_stride = self.get_parameter('temporal_stride').get_parameter_value().integer_value
+        outputs_param = self.get_parameter('outputs').get_parameter_value().string_array_value
         use_mask = self.get_parameter('use_mask').get_parameter_value().bool_value
         refine_mask = self.get_parameter('refine_mask').get_parameter_value().bool_value
         relative = self.get_parameter('relative').get_parameter_value().bool_value
@@ -77,15 +87,26 @@ class TactileStreamerNode(Node):
         self.mode = mode
         self.return_color = return_color
 
-        # Determine outputs based on mode
-        if mode == 'depth':
-            outputs = ['depth']
-        elif mode == 'gradient':
-            outputs = ['gradient']
-        elif mode == 'pointcloud':
-            outputs = ['pointcloud']
+        # Determine outputs based on explicit parameter or mode
+        if outputs_param:
+            outputs = list(outputs_param)
         else:
-            outputs = ['depth']
+            # Derive from mode
+            if mode == 'depth':
+                outputs = ['depth']
+            elif mode == 'gradient':
+                outputs = ['gradient']
+            elif mode == 'pointcloud':
+                outputs = ['pointcloud']
+            elif mode == 'force_field':
+                outputs = ['force_field']
+            elif mode == 'force_vector':
+                outputs = ['force_vector']
+            else:
+                outputs = ['depth']
+        
+        # Store outputs for publishing
+        self.outputs = outputs
 
         # Initialize LiveTactileProcessor with all parameters
         try:
@@ -94,7 +115,8 @@ class TactileStreamerNode(Node):
                 sensors_root=sensors_root,
                 model_device=model_device,
                 enable_depth=True,
-                enable_force=False,
+                enable_force=enable_force,
+                temporal_stride=temporal_stride,
                 outputs=outputs,
                 use_mask=use_mask,
                 refine_mask=refine_mask,
@@ -111,11 +133,40 @@ class TactileStreamerNode(Node):
 
         self.bridge = CvBridge()
         
-        # Create appropriate publisher based on mode
+        # Create publishers based on outputs
+        self.publishers = {}
+        
+        # For backward compatibility, create legacy mode-based publisher
         if mode == 'pointcloud':
             self.publisher = self.create_publisher(PointCloud2, topic, 10)
-        else:  # depth or gradient
+            self.publishers['pointcloud'] = self.publisher
+        elif mode in ['depth', 'gradient']:
             self.publisher = self.create_publisher(Image, topic, 10)
+            self.publishers[mode] = self.publisher
+        elif mode == 'force_field':
+            self.publisher = self.create_publisher(Image, topic, 10)
+            self.publishers['force_field'] = self.publisher
+        elif mode == 'force_vector':
+            self.publisher = self.create_publisher(WrenchStamped, topic, 10)
+            self.publishers['force_vector'] = self.publisher
+        else:
+            self.publisher = self.create_publisher(Image, topic, 10)
+            self.publishers['depth'] = self.publisher
+        
+        # Create additional publishers for multi-output mode
+        base_topic = f"tactile/{serial}"
+        for output in outputs:
+            if output not in self.publishers:
+                if output == 'depth':
+                    self.publishers['depth'] = self.create_publisher(Image, f"{base_topic}/depth", 10)
+                elif output == 'gradient':
+                    self.publishers['gradient'] = self.create_publisher(Image, f"{base_topic}/gradient", 10)
+                elif output == 'pointcloud':
+                    self.publishers['pointcloud'] = self.create_publisher(PointCloud2, f"{base_topic}/pointcloud", 10)
+                elif output == 'force_field':
+                    self.publishers['force_field'] = self.create_publisher(Image, f"{base_topic}/force_field", 10)
+                elif output == 'force_vector':
+                    self.publishers['force_vector'] = self.create_publisher(WrenchStamped, f"{base_topic}/force_vector", 10)
             
         self.timer = self.create_timer(1.0 / rate, self.timer_callback)
 
@@ -123,39 +174,79 @@ class TactileStreamerNode(Node):
         frame, result_dict = self.processor.get_latest_output()
         if not result_dict:
             return
-        
-        # Extract the result for the current mode
-        result = result_dict.get(self.mode)
-        if result is None:
-            return
             
         header = Header()
         header.stamp = self.get_clock().now().to_msg()
         header.frame_id = f"tactile_{self.get_parameter('serial').get_parameter_value().string_value}"
 
-        if self.mode == 'pointcloud':
-            # Handle pointcloud output
-            if isinstance(result, tuple) and self.return_color:
-                pc, colors = result
-                msg = self.create_pointcloud2_msg(pc, header, colors)
-            else:
-                pc = result
-                msg = self.create_pointcloud2_msg(pc, header)
-            self.publisher.publish(msg)
+        # Publish all available outputs
+        for output_name, result in result_dict.items():
+            if result is None:
+                continue  # Skip None results (e.g., force during warmup)
             
-        elif self.mode == 'depth':
-            # Handle depth output (2D array, uint8)
-            if len(result.shape) == 2:
-                msg = self.bridge.cv2_to_imgmsg(result, encoding='mono8')
-                msg.header = header
-                self.publisher.publish(msg)
+            if output_name not in self.publishers:
+                continue  # Skip outputs without publishers
+            
+            publisher = self.publishers[output_name]
+            
+            if output_name == 'pointcloud':
+                # Handle pointcloud output
+                if isinstance(result, tuple) and self.return_color:
+                    pc, colors = result
+                    msg = self.create_pointcloud2_msg(pc, header, colors)
+                else:
+                    pc = result
+                    msg = self.create_pointcloud2_msg(pc, header)
+                if msg is not None:
+                    publisher.publish(msg)
                 
-        elif self.mode == 'gradient':
-            # Handle gradient output (H, W, 2) - convert to 2-channel float32 image
-            if len(result.shape) == 3 and result.shape[2] == 2:
-                msg = self.bridge.cv2_to_imgmsg(result.astype(np.float32), encoding='32FC2')
-                msg.header = header
-                self.publisher.publish(msg)
+            elif output_name == 'depth':
+                # Handle depth output (2D array, uint8)
+                if len(result.shape) == 2:
+                    msg = self.bridge.cv2_to_imgmsg(result, encoding='mono8')
+                    msg.header = header
+                    publisher.publish(msg)
+                    
+            elif output_name == 'gradient':
+                # Handle gradient output (H, W, 2) - convert to 2-channel float32 image
+                if len(result.shape) == 3 and result.shape[2] == 2:
+                    msg = self.bridge.cv2_to_imgmsg(result.astype(np.float32), encoding='32FC2')
+                    msg.header = header
+                    publisher.publish(msg)
+            
+            elif output_name == 'force_field':
+                # Handle force field output - dict with 'normal' and 'shear'
+                if isinstance(result, dict):
+                    normal = result.get('normal')  # [224, 224]
+                    shear = result.get('shear')    # [224, 224, 2]
+                    
+                    if normal is not None and shear is not None:
+                        # Create 3-channel RGB image: R=Fx, G=Fz, B=Fy
+                        force_rgb = np.zeros((normal.shape[0], normal.shape[1], 3), dtype=np.float32)
+                        force_rgb[:, :, 0] = shear[:, :, 0]  # Fx (horizontal shear)
+                        force_rgb[:, :, 1] = normal           # Fz (normal force)
+                        force_rgb[:, :, 2] = shear[:, :, 1]  # Fy (vertical shear)
+                        
+                        msg = self.bridge.cv2_to_imgmsg(force_rgb, encoding='32FC3')
+                        msg.header = header
+                        publisher.publish(msg)
+            
+            elif output_name == 'force_vector':
+                # Handle force vector output - dict with 'fx', 'fy', 'fz'
+                if isinstance(result, dict):
+                    fx = result.get('fx', 0.0)
+                    fy = result.get('fy', 0.0)
+                    fz = result.get('fz', 0.0)
+                    
+                    msg = WrenchStamped()
+                    msg.header = header
+                    msg.wrench.force.x = float(fx)
+                    msg.wrench.force.y = float(fy)
+                    msg.wrench.force.z = float(fz)
+                    msg.wrench.torque.x = 0.0
+                    msg.wrench.torque.y = 0.0
+                    msg.wrench.torque.z = 0.0
+                    publisher.publish(msg)
 
     def create_pointcloud2_msg(self, points, header, colors=None):
         """Create a PointCloud2 message from numpy point array."""
