@@ -19,6 +19,149 @@ This integration leverages **Sparsh** (https://github.com/facebookresearch/spars
 - Maintain backward compatibility via deprecation warnings
 - Enable ROS2 integration with force-specific message types
 
+## Implementation Guidelines for AI Coding Agents
+
+**CRITICAL**: These guidelines MUST be followed during implementation.
+
+### 1. One Step at a Time ⚠️
+
+- **Execute ONLY ONE step** from the Implementation Steps section per iteration
+- After completing a step:
+  1. Run all relevant tests
+  2. Debug any errors completely
+  3. Show results to user with evidence (test output, file contents, screenshots)
+  4. Wait for user confirmation before proceeding to next step
+- **NEVER** skip ahead or combine steps
+- **NEVER** assume a step works without testing
+
+### 2. Read and Update Plan ⚠️
+
+**Before starting ANY work**:
+1. Read PLAN.md completely, line by line
+2. Identify which step you're implementing
+3. Note all requirements, specifications, and constraints for that step
+
+**After completing each step**:
+1. Update this plan with:
+   - ✅ Mark step as complete
+   - Add any deviations from original spec
+   - Document any issues encountered and resolutions
+   - Note any assumptions made (see below)
+2. Commit updated PLAN.md with descriptive message
+
+### 3. No Assumptions - Always Ask ⚠️
+
+**STOP and ASK the user if**:
+- Any specification is unclear or ambiguous
+- You need to choose between multiple valid approaches
+- You encounter unexpected behavior
+- External documentation conflicts with plan
+- A dependency version is not specified
+- File structure differs from plan
+- You need to make ANY assumption about:
+  - File paths
+  - Function signatures
+  - Data formats
+  - Configuration values
+  - User preferences
+
+**Always look for official documentation**:
+- Check official GitHub repos (not blog posts)
+- Read HuggingFace model cards directly
+- Verify API documentation from source
+- Link to official docs in your questions to user
+
+### 4. Brief User After Each Step ⚠️
+
+**Required template for step completion**:
+
+```markdown
+## Step [N] Complete: [Step Name]
+
+### What Was Done
+- [Bullet list of concrete actions taken]
+- [Files created/modified]
+- [Commands run]
+
+### Test Results
+[Paste actual test output, not "tests passed"]
+```bash
+$ command_run
+output here
+```
+
+### Assumptions Made
+- [List ANY assumptions, or state "None"]
+- [If assumptions made, explain why and ask for confirmation]
+
+### Deviations from Plan
+- [List any deviations, or state "None"]
+- [Explain rationale for deviations]
+
+### Files Changed
+- [file1.py] - [what changed]
+- [file2.py] - [what changed]
+
+### Next Step
+[State what the next step will be, but DON'T start it yet]
+
+**Ready to proceed? [Yes/No]**
+```
+
+**Wait for user response before continuing**
+
+### 5. Testing Requirements ⚠️
+
+For EACH step:
+1. Write tests BEFORE implementation (if applicable)
+2. Run tests AFTER implementation
+3. Show FULL test output (not summaries)
+4. Debug failures completely before moving on
+5. Document test commands in brief
+
+### 6. Error Handling ⚠️
+
+When errors occur:
+1. **DO NOT** skip over errors
+2. Read error messages completely
+3. Check logs/stack traces
+4. Try obvious fixes (typos, imports, paths)
+5. If not obvious → ASK user, don't guess
+6. Document error and resolution in brief
+
+### 7. Version Control ⚠️
+
+After EACH step:
+```bash
+git add [files]
+git commit -m "Step [N]: [concise description]
+
+- [what was implemented]
+- [tests status]
+- [any issues resolved]"
+```
+
+### 8. Code Quality ⚠️
+
+- Follow existing code style in repository
+- Add docstrings to all functions/classes
+- Include type hints where applicable
+- Comment complex logic
+- Keep functions focused and small
+
+### 9. Validation Checklist ⚠️
+
+Before marking step complete:
+- [ ] Code runs without errors
+- [ ] Tests pass (or explain why no tests yet)
+- [ ] Follows plan specifications exactly
+- [ ] No assumptions made, or assumptions documented and approved
+- [ ] User briefed with template above
+- [ ] Changes committed to git
+- [ ] PLAN.md updated
+
+---
+
 ## Key Design Decisions
 
 ### Architecture
@@ -68,32 +211,37 @@ This integration leverages **Sparsh** (https://github.com/facebookresearch/spars
 - `'mask'`: `[H, W]` bool, contact mask
 
 **Force Outputs** (new):
-- `'force_field'`: dict
+- `'force_field'`: dict or None (None if temporal buffer not ready)
   - `'normal'`: `[224, 224]` float32, normalized forces
   - `'shear'`: `[224, 224, 2]` float32, (Fx, Fy) components
-- `'force_vector'`: dict
+- `'force_vector'`: dict or None (None if temporal buffer not ready)
   - `'fx'`: float32 scalar
   - `'fy'`: float32 scalar
   - `'fz'`: float32 scalar
   - All in normalized units [-1, 1]
 
+**Temporal Buffer Warmup**: Both force outputs return `None` until buffer has ≥`stride` frames. After warmup, always return valid dict.
+
 ### Exact Preprocessing Pipeline
 
 ```python
-def preprocess_force_input(img_t, img_t_minus_5, bg):
+def preprocess_force_input(img_t, img_t_minus_5, bg, bg_offset=0.5):
     """
     Based on Sparsh tactile_ssl/data/digit/utils.py
+    
+    Args:
+        bg_offset: Background subtraction offset (default 0.5 from Sparsh)
     """
-    # Step 1: Background subtraction with offset
-    def subtract_bg(img, bg):
+    # Step 1: Background subtraction with configurable offset
+    def subtract_bg(img, bg, offset):
         diff = img.astype(np.int32) - bg.astype(np.int32)
-        diff = diff / 255.0 + 0.5  # Offset = 0.5
+        diff = diff / 255.0 + offset  # Configurable offset
         diff = np.clip(diff, 0.0, 1.0)
         diff = (diff * 255.0).astype(np.uint8)
         return diff
     
-    img_t_diff = subtract_bg(img_t, bg)
-    img_t5_diff = subtract_bg(img_t_minus_5, bg)
+    img_t_diff = subtract_bg(img_t, bg, bg_offset)
+    img_t5_diff = subtract_bg(img_t_minus_5, bg, bg_offset)
     
     # Step 2: Convert to PIL
     img_t_pil = Image.fromarray(img_t_diff).convert("RGB")
@@ -142,22 +290,36 @@ class TactileProcessor:
         self._lock = threading.Lock()
         self._latest_frame = None
         self._latest_result = {}
+        self._outputs = []  # Thread-safe: set once, read-only
         
-    def start_thread(self):
-        self._running = True
+    def start_thread(self, outputs=['depth']):
+        """Start background processing thread.
+        
+        Args:
+            outputs: List of outputs to compute. Set once at thread start.
+        """
+        with self._lock:
+            self._outputs = outputs  # Set under lock
+            self._running = True
         self._thread = threading.Thread(target=self._process_loop, daemon=True)
         self._thread.start()
         
     def _process_loop(self):
-        while self._running:
+        while True:
             with self._lock:
+                if not self._running:
+                    break
                 frame = self._latest_frame
+                outputs = self._outputs  # Copy under lock
+            
             if frame is not None:
-                result = self.process(frame, outputs=self._outputs)
+                result = self.process(frame, outputs=outputs)
                 with self._lock:
                     self._latest_result = result
             time.sleep(0.001)
 ```
+
+**Fix**: `outputs` copied under lock before calling `process()` to avoid race condition.
 
 ### Backward Compatibility Strategy
 
@@ -177,19 +339,32 @@ class LiveReconstructor(LiveTactileProcessor):
             "LiveReconstructor is deprecated, use LiveTactileProcessor",
             DeprecationWarning, stacklevel=2
         )
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, enable_force=False, **kwargs)  # Force disabled for legacy
         self._legacy_mode = mode
         
     def get_latest_output(self):
         frame, result_dict = super().get_latest_output()
         # Extract the specific mode output for backward compatibility
+        result = None
         if self._legacy_mode == "depth":
-            return frame, result_dict.get('depth')
+            result = result_dict.get('depth')
         elif self._legacy_mode == "gradient":
-            return frame, result_dict.get('gradient')
+            result = result_dict.get('gradient')
         elif self._legacy_mode == "pointcloud":
-            return frame, result_dict.get('pointcloud')
+            result = result_dict.get('pointcloud')
+        
+        # Handle None case (computation failed or not available)
+        if result is None:
+            warnings.warn(
+                f"Result for mode '{self._legacy_mode}' is None. "
+                f"This may break legacy code expecting valid output.",
+                RuntimeWarning, stacklevel=2
+            )
+        
+        return frame, result
 ```
+
+**Error handling**: Warns if result is None to alert legacy code of potential breakage.
 
 ### Error Handling Specifications
 
@@ -213,12 +388,15 @@ except RuntimeError as e:
     else:
         raise
 
-# Force buffer not ready
+# Force buffer not ready - return None for force outputs
 if not self.force_buffer.is_ready():
-    return {
-        'force_field': None,
-        'force_vector': None
-    }
+    # Only return None for force keys, omit other outputs
+    result = {}
+    if 'force_field' in outputs:
+        result['force_field'] = None
+    if 'force_vector' in outputs:
+        result['force_vector'] = None
+    return result
 
 # Invalid outputs requested
 if 'force_field' in outputs and not self._force_enabled:
@@ -279,8 +457,8 @@ if 'force_field' in outputs and not self._force_enabled:
 **Features**:
 - Load pretrained weights from `models/` directory
 - Temporal buffering integration via `TemporalBuffer`
-- **Exact preprocessing pipeline**:
-  1. Background subtraction: `(img - bg).astype(float32) / 255.0 + 0.5`, clipped to [0, 1]
+- **Exact preprocessing pipeline** (configurable via `bg_offset` parameter):
+  1. Background subtraction: `(img - bg).astype(float32) / 255.0 + bg_offset`, clipped to [0, 1]
   2. Convert to PIL RGB
   3. Resize to 224×224 (antialias interpolation)
   4. ToTensor: converts to [0, 1] float32 (NO ImageNet normalization)
@@ -314,6 +492,7 @@ if 'force_field' in outputs and not self._force_enabled:
 - `force_encoder_path='models/sparsh_dino_base_encoder.pth'`
 - `force_decoder_path='models/sparsh_digit_forcefield_decoder.pth'`
 - `temporal_stride=5` (frames between temporal pair)
+- `bg_offset=0.5` (background subtraction offset for force estimation)
 - `device='cuda'` (auto-fallback to CPU with warning)
 
 **Methods**:
@@ -378,6 +557,9 @@ if 'force_field' in outputs and not self._force_enabled:
 - PointCloud: `sensor_msgs/PointCloud2` → `/tactile/{serial}/pointcloud`
 - Force field: `sensor_msgs/Image` 32FC3 → `/tactile/{serial}/force_field`
 - Force vector: `geometry_msgs/WrenchStamped` → `/tactile/{serial}/force_vector`
+  - **Rationale**: Use `WrenchStamped` (not `Vector3Stamped`) for ROS convention compliance
+  - Populate `wrench.force` = [Fx, Fy, Fz], set `wrench.torque` = [0, 0, 0]
+  - Standard message type for force/torque sensors in ROS ecosystem
 
 ### 10. Update ROS2 Launch File
 **File**: `ros2/launch/multi_sensor_tactile_streamer.launch.py`
@@ -735,20 +917,25 @@ pyyaml
 
 ### To Verify Before Step 1
 
-1. **Exact dependency versions**: Need Sparsh `environment.yml` contents for pinned versions
+1. **Model compatibility**: ✅ HuggingFace page confirms decoder works with dino-base encoder
+   - Verified from official model card: "Sparsh (DINO) + force field decoder"
+   - Download instructions explicitly reference dino-base checkpoint
+   - No compatibility uncertainty
+
+2. **Exact dependency versions**: Need Sparsh `environment.yml` contents for pinned versions
    - Current plan uses loose constraints (e.g., `torch>=2.0,<3.0`)
    - May need specific torch/torchvision/xformers versions
 
-2. **Model file formats**: Confirm downloaded files are `.pth` and loadable via `torch.load()`
+3. **Model file formats**: Confirm downloaded files are `.pth` and loadable via `torch.load()`
    - HuggingFace may provide safetensors or other formats
    - May need format conversion
 
-3. **Background image compatibility**: Verify current VisTac background collection works for Sparsh
+4. **Background image compatibility**: Verify current VisTac background collection works for Sparsh
    - Current: 10 averaged frames
    - Sparsh: expects single background image
    - Should work, but needs testing
 
-4. **Image size adaptation**: VisTac sensors output 320×240, Sparsh expects 224×224
+5. **Image size adaptation**: VisTac sensors output 320×240, Sparsh expects 224×224
    - Plan handles via resize
    - Verify no quality degradation
 
@@ -790,6 +977,50 @@ print(f"Decoder keys: {decoder.keys()}")
 
 ---
 
-**Status**: Plan is now **95% concrete** with all Sparsh-specific details verified from source code. Remaining 5% requires downloading models and testing on real hardware.
+## Critical Fixes Applied
+
+### From Peer Review Feedback
+
+1. **Threading race condition** (Issue #7) - FIXED ✅
+   - `outputs` now copied under lock before `process()` call
+   - Prevents race condition if outputs change during processing
+
+2. **Temporal buffer return format** (Issue #3) - CLARIFIED ✅
+   - Force outputs return `None` until buffer ready (consistent spec)
+   - After warmup, always return valid dict (never None)
+   - Documented in data formats section
+
+3. **Background offset hardcoded** (Issue #2) - FIXED ✅
+   - Added `bg_offset` parameter to constructors (default 0.5)
+   - Configurable per sensor via YAML config
+   - Preprocessing function accepts offset parameter
+
+4. **Backward compatibility error handling** (Issue #8) - FIXED ✅
+   - Warns if result is None (computation failed)
+   - Alerts legacy code of potential breakage
+   - Explicitly disables force for legacy wrapper
+
+5. **ROS2 WrenchStamped justification** (Issue #6) - DOCUMENTED ✅
+   - Explained rationale: ROS convention compliance
+   - Torque fields set to zero (standard practice)
+   - Alternative considered, decision documented
+
+6. **Model compatibility verification** (Issue #1) - ADDRESSED ✅
+   - HuggingFace model card explicitly confirms dino-base encoder
+   - Not inference, official documentation
+   - Added to verification section
+
+### Design Decisions Affirmed
+
+- **No force calibration**: Intentional MVP scope decision (not missing feature)
+- **Normalized outputs**: Users can add calibration later if needed
+- **Monolithic processor**: Appropriate for MVP, can refactor later
+- **Hardcoded preprocessing**: Fine for Sparsh v1, extensible later
+
+---
+
+**Status**: Plan is now **98% concrete** with critical issues resolved. Remaining 2% requires downloading models and testing on real hardware.
+
+**Confidence**: Ready for implementation
 
 **Next Steps**: Begin implementation with Step 1 (model download script)
