@@ -465,13 +465,43 @@ if 'force_field' in outputs and not self._force_enabled:
 - `models/sparsh_dino_base_encoder.ckpt` (downloaded)
 - `models/sparsh_digit_forcefield_decoder.pth` (downloaded)
 
-### 2. Create Temporal Buffer Utility
-**File**: `scripts/download_models.py`
+### 2. Create Temporal Buffer Utility ✅ COMPLETE
+**File**: `vistac_sdk/temporal_buffer.py`
 
-- Download `facebook/sparsh-dino-base` encoder from HuggingFace (required for decoder compatibility)
-- Download `facebook/sparsh-digit-forcefield-decoder` decoder from HuggingFace
-- Save to `models/` directory: `sparsh_dino_base_encoder.pth`, `sparsh_digit_forcefield_decoder.pth`
-- Add progress bars, checksum validation, resume capability
+**Status**: COMPLETE (February 9, 2026)
+
+**What was done**:
+- Implemented `TemporalBuffer` class with full circular buffer functionality
+- Key methods:
+  - `add(frame, timestamp)`: stores frame with timestamp in circular buffer
+  - `get_pair(stride)`: returns `(frame_t, frame_t-stride)` tuple or None during warmup
+  - `is_ready()`: checks if buffer has sufficient frames for pairs
+  - `clear()`: resets buffer while preserving configuration
+  - `get_frame_rate()`: estimates FPS from timestamps
+- Comprehensive test suite with 17 unit tests covering:
+  - Basic functionality (initialization, frame addition)
+  - Temporal pair retrieval with custom strides
+  - Circular buffer behavior (overflow, continuous streaming)
+  - Utility methods (timestamps, frame rate, clearing)
+  - Edge cases (minimum size, large stride, different shapes)
+  - Frame copying (independence from original arrays)
+
+**Deviations from plan**:
+- **NONE** - Implemented exactly as specified
+
+**Verification**:
+- All 17 unit tests passed ✓
+- Circular buffer drops oldest frames correctly ✓
+- Returns None during warmup (stride + 1 frames needed) ✓
+- Frame independence verified (copies not references) ✓
+- Supports custom strides and different frame shapes ✓
+
+**Files created**:
+- [vistac_sdk/temporal_buffer.py](vistac_sdk/temporal_buffer.py) (240 lines)
+- [tests/test_temporal_buffer.py](tests/test_temporal_buffer.py) (347 lines)
+- [tests/__init__.py](tests/__init__.py)
+
+### 3. Create Force Estimation Module
 - Use `huggingface_hub` library for downloading
 
 ### 2. Create Temporal Buffer Utility
