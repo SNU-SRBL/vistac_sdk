@@ -11,3 +11,10 @@ imgw: 240
 raw_imgh: 320
 raw_imgw: 240
 framerate: 30
+# Force Estimation (Sparsh)
+force:
+  enabled: false
+  temporal_stride: 5
+  encoder: sparsh-dino-base  # Required for decoder compatibility
+  decoder: sparsh-digit-forcefield
+  bg_offset: 0.5  # Background subtraction offset

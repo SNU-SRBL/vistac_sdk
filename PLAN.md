@@ -922,18 +922,38 @@ if 'force_field' in outputs and not self._force_enabled:
 **Files modified**:
 - [ros2/launch/multi_sensor_tactile_streamer.launch.py](ros2/launch/multi_sensor_tactile_streamer.launch.py) - Added force and pointcloud parameters (+40 lines, 165 lines total)
 
-### 12. Update Sensor Configs
+### 12. Update Sensor Configs ✅ COMPLETE
 **Files**: `sensors/{serial}/{serial}.yaml`
 
-**Add optional section**:
-```yaml
-force:
-  enabled: false
-  temporal_stride: 5
-  encoder: sparsh-dino-base  # Required for decoder compatibility
-  decoder: sparsh-digit-forcefield
-  bg_offset: 0.5  # Background subtraction offset
-```
+**Status**: COMPLETE (February 9, 2026)
+
+**What was done**:
+- Added force estimation configuration section to all 4 sensor YAML files:
+  - `sensors/D21119/D21119.yaml`
+  - `sensors/D21242/D21242.yaml`
+  - `sensors/D21273/D21273.yaml`
+  - `sensors/D21275/D21275.yaml`
+- Added configuration parameters:
+  - `enabled: false` (disabled by default for backward compatibility)
+  - `temporal_stride: 5` (5 frame gap for temporal pairs)
+  - `encoder: sparsh-dino-base` (ViT-base encoder for decoder compatibility)
+  - `decoder: sparsh-digit-forcefield` (force field decoder)
+  - `bg_offset: 0.5` (background subtraction offset)
+
+**Deviations from plan**:
+- **None** - Implemented exactly as specified
+
+**Verification**:
+- All 4 YAML files parse correctly ✓
+- Force configuration loaded successfully ✓
+- All parameters use correct types (bool, int, string, float) ✓
+- Default values maintain backward compatibility (enabled: false) ✓
+
+**Files modified**:
+- [sensors/D21119/D21119.yaml](sensors/D21119/D21119.yaml) - Added force config section
+- [sensors/D21242/D21242.yaml](sensors/D21242/D21242.yaml) - Added force config section
+- [sensors/D21273/D21273.yaml](sensors/D21273/D21273.yaml) - Added force config section
+- [sensors/D21275/D21275.yaml](sensors/D21275/D21275.yaml) - Added force config section
 
 ### 13. Update Dependencies
 **Files**: `setup.py`, `requirements.txt`, `package.xml`
