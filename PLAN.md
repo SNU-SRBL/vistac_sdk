@@ -595,19 +595,27 @@ if 'force_field' in outputs and not self._force_enabled:
 - Removed deprecated backward compatibility code (full refactoring)
 - Kept core pipeline: BGRXY→MLP→gradients→Poisson→depth/pointcloud
 - Old methods still available: `get_depth()`, `get_gradient()`, `get_point_cloud()`
+- **FIXED BROKEN IMPORTS**: Updated `live_core.py` to use `DepthEstimator` with threading at LiveReconstructor level
 - Comprehensive test suite: 16 tests, all passing ✓
 
 **Deviations from plan**:
-- **No backward compatibility**: Removed `Reconstructor` alias completely (clean refactoring)
-- **No warnings module**: Not needed without deprecation warnings
+- **No backward compatibility aliases**: Removed `Reconstructor` class name completely (full refactoring approach)
+- **Updated live_core.py immediately**: To fix broken imports, moved threading from estimator to LiveReconstructor
+  - Note: LiveReconstructor will be refactored again in Step 6 to use TactileProcessor
+  - This is a temporary bridge to keep existing apps/ROS2 working during refactoring
 
 **Verification**:
-- All 16 unit tests passed ✓
+- All 48 unit tests passed ✓ (depth + force + temporal buffer)
 - Test coverage: initialization, estimate() method, multiple outputs, old methods
 - Dict return format works correctly for all output types
+- **Backward compatibility verified**:
+  - `from vistac_sdk.live_core import LiveReconstructor` ✓ works
+  - `apps/live_viewer.py` ✓ imports successfully
+  - `ros2/tactile_streamer_node.py` ✓ imports successfully
 
 **Files created/modified**:
-- [vistac_sdk/vistac_reconstruct.py](vistac_sdk/vistac_reconstruct.py) - Refactored (340 lines, removed threading)
+- [vistac_sdk/vistac_reconstruct.py](vistac_sdk/vistac_reconstruct.py) - Refactored (425 lines, removed threading)
+- [vistac_sdk/live_core.py](vistac_sdk/live_core.py) - Updated to use DepthEstimator + added threading (163 lines)
 - [tests/test_depth_estimator.py](tests/test_depth_estimator.py) - New test suite (309 lines)
 
 ### 5. Create Unified Processor
@@ -646,11 +654,12 @@ if 'force_field' in outputs and not self._force_enabled:
 **File**: `vistac_sdk/live_core.py`
 
 **Changes**:
-- Rename `LiveReconstructor` → `LiveTactileProcessor`
+- **REPLACES temporary Step 4 fix**: Complete rewrite of `LiveReconstructor` → `LiveTactileProcessor`
+- Use new `TactileProcessor` (combines DepthEstimator + ForceEstimator)
 - Add constructor params: `enable_depth=True`, `enable_force=False`, `temporal_stride=5`
-- Use `TactileProcessor` instead of `Reconstructor`
-- Update `get_latest_output()` → returns `(frame, result_dict)`
+- Update `get_latest_output()` → returns `(frame, result_dict)` where result_dict contains requested outputs
 - Keep background collection logic (average 10 frames)
+- Threading moved to TactileProcessor level (remove from LiveTactileProcessor)
 
 ### 7. Update Visualization Utilities
 **File**: `vistac_sdk/viz_utils.py`
@@ -673,6 +682,10 @@ if 'force_field' in outputs and not self._force_enabled:
 
 ### 9. Update ROS2 Node
 **File**: `ros2/tactile_streamer_node.py`
+
+**Changes**:
+- Replace `LiveReconstructor` import with `LiveTactileProcessor`
+- Update class usage throughout node
 
 **New parameters**:
 - `enable_depth` (bool, default True)
@@ -743,10 +756,12 @@ force:
 - `LiveTactileProcessor`
 - `DepthEstimator`
 - `ForceEstimator`
+- `TemporalBuffer`
 
-**Backward compatibility**:
-- `Reconstructor = DepthEstimator` (with deprecation warning)
-- `LiveReconstructor = LiveTactileProcessor` (with deprecation warning)
+**Backward compatibility** (OPTIONAL - not needed since we're doing full refactoring):
+- Could add: `Reconstructor = DepthEstimator` (with deprecation warning)
+- Could add: `LiveReconstructor = LiveTactileProcessor` (with deprecation warning)
+- **Decision**: Skip backward compatibility aliases since all code updated in Steps 6, 8, 9
 
 ## Verification Plan
 
