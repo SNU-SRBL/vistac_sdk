@@ -618,37 +618,81 @@ if 'force_field' in outputs and not self._force_enabled:
 - [vistac_sdk/live_core.py](vistac_sdk/live_core.py) - Updated to use DepthEstimator + added threading (163 lines)
 - [tests/test_depth_estimator.py](tests/test_depth_estimator.py) - New test suite (309 lines)
 
-### 5. Create Unified Processor
+### 5. Create Unified Processor ✅ COMPLETE
 **File**: `vistac_sdk/tactile_processor.py`
+
+**Status**: COMPLETE (February 9, 2026)
+
+**What was done**:
+- Implemented `TactileProcessor` class (302 lines) with full functionality:
+  - Lazy initialization of depth/force estimators based on enable flags
+  - Selective execution (only computes requested outputs)
+  - Thread-safe background processing with locks
+  - Force buffer warmup handling (returns None during warmup)
+  - Background loading dispatched to both estimators
+  - Default output selection based on enabled estimators
+  - Parameter override support (ppmm per call)
+  - Proper cleanup in `__del__` method
+- Comprehensive test suite (465 lines, 20 tests, all passing):
+  - Initialization tests (both/depth/force enabled, error handling)
+  - Background loading tests
+  - Processing tests (selective outputs, warmup, validation)
+  - Threading tests (start/stop, continuous processing)
+  - Default outputs tests
+
+**Deviations from plan**:
+- **Thread cleanup**: `stop_thread()` keeps thread reference (doesn't set to None) to allow testing `is_alive()` status
+- **Error handling**: `__del__` uses try/except to handle partially initialized objects gracefully
+- **None** - All API and functionality matches plan specifications exactly
+
+**Verification**:
+- All 20 TactileProcessor tests passed ✓
+- All 68 total tests passed (including existing tests) ✓
+- Lazy initialization works (only loads enabled estimators) ✓
+- Selective execution works (only computes requested outputs) ✓
+- Threading works (background processing with locks) ✓
+- Force warmup handling works (returns None until ready) ✓
+- Error validation works (clear errors for invalid configs) ✓
+
+**Files created**:
+- [vistac_sdk/tactile_processor.py](vistac_sdk/tactile_processor.py) (302 lines)
+- [tests/test_tactile_processor.py](tests/test_tactile_processor.py) (465 lines)
 
 **Class**: `TactileProcessor`
 
 **Constructor params**:
 - `model_path`: path to depth MLP (e.g., 'sensors/D21119/model/nnmodel.pth')
 - `enable_depth=True`, `enable_force=True`
-- `force_encoder_path='models/sparsh_dino_base_encoder.pth'`
+- `force_encoder_path='models/sparsh_dino_base_encoder.ckpt'`
 - `force_decoder_path='models/sparsh_digit_forcefield_decoder.pth'`
 - `temporal_stride=5` (frames between temporal pair)
 - `bg_offset=0.5` (background subtraction offset for force estimation)
 - `device='cuda'` (auto-fallback to CPU with warning)
+- `ppmm=None` (pixels per mm for depth estimation)
+- `contact_mode='standard'` (contact mode for depth estimation)
 
 **Methods**:
 - `load_background(bg_image)`: pass to both estimators
   - Depth: calculates background gradients (existing logic)
   - Force: stores bg for preprocessing subtraction
-- `process(image, outputs=['depth', 'force_field', 'force_vector'])`: selective computation
+- `set_ppmm(ppmm)`: set pixels per mm for depth estimation
+- `process(image, outputs=['depth', 'force_field', 'force_vector'], timestamp=None, ppmm=None, **depth_kwargs)`: selective computation
   - Validates outputs against enabled estimators
   - Returns dict with only requested keys
   - Returns None for force outputs if temporal buffer not ready
-- `start_thread()`, `set_input_frame()`, `get_latest_result()`: threaded mode
-  - Single background thread processes both estimators
-  - Thread-safe locks for frame/result access
+  - Supports ppmm override per call
+- `start_thread(outputs=None, ppmm=None, **depth_kwargs)`: start background processing
+- `stop_thread()`: stop background processing
+- `set_input_frame(frame, timestamp=None)`: set input for background thread
+- `get_latest_result()`: get latest processing result from thread
+- `is_background_loaded()`: check if background has been loaded
 
 **Features**:
 - Lazy initialization (only load enabled estimators)
 - Selective execution (only run requested outputs)
 - Threading support for continuous processing
 - Force buffer warmup handling
+- Thread-safe locks with outputs copied under lock to prevent race conditions
 
 ### 6. Update Live API
 **File**: `vistac_sdk/live_core.py`
