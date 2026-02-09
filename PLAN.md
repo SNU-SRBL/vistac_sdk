@@ -424,7 +424,48 @@ if 'force_field' in outputs and not self._force_enabled:
 
 ## Implementation Steps
 
-### 1. Create Model Download Script
+### 1. Create Model Download Script ✅ COMPLETE
+**File**: `scripts/download_models.py`
+
+**Status**: COMPLETE (February 9, 2026)
+
+**What was done**:
+- Created `scripts/` and `models/` directories
+- Implemented `download_models.py` with full functionality:
+  - Downloads from HuggingFace Hub using `huggingface_hub` library
+  - Progress bars via tqdm
+  - File verification and SHA256 checksums
+  - Resume capability (automatic via hf_hub_download)
+  - `--check-only`, `--force`, and `--models-dir` options
+- Created `models/README.md` with model documentation
+- Successfully downloaded both models:
+  - Encoder: `sparsh_dino_base_encoder.ckpt` (1.7 GB) ✓
+  - Decoder: `sparsh_digit_forcefield_decoder.pth` (15 MB) ✓
+
+**Deviations from plan**:
+- Actual filenames differ from initial assumption:
+  - Encoder: `dino_vitbase.ckpt` (not `model.pth`) - PyTorch Lightning checkpoint
+  - Decoder: `digit_t1_forcefield_dino_vitbase_bg/checkpoints/epoch-0031.pth` (not `model.pth`)
+- File sizes larger than estimated (encoder is 1.7GB vs ~300MB estimate)
+- Encoder file format is `.ckpt` (PyTorch Lightning) not `.pth`
+  - **Note**: Lightning checkpoints contain class references to Sparsh modules
+  - Cannot fully deserialize without `tactile_ssl` module installed (expected behavior)
+  - **This is OK**: In Step 3, we'll extract just the `state_dict` (weights) and load into our own model class
+  - Decoder is standard state_dict format and loads perfectly
+
+**Verification**:
+- Files downloaded successfully ✓
+- Decoder loads as state_dict ✓
+- Encoder is valid checkpoint (Lightning format, will extract weights in Step 3) ✓
+- Script tested with `--check-only` and `--help` ✓
+
+**Files created**:
+- [scripts/download_models.py](scripts/download_models.py)
+- [models/README.md](models/README.md)
+- `models/sparsh_dino_base_encoder.ckpt` (downloaded)
+- `models/sparsh_digit_forcefield_decoder.pth` (downloaded)
+
+### 2. Create Temporal Buffer Utility
 **File**: `scripts/download_models.py`
 
 - Download `facebook/sparsh-dino-base` encoder from HuggingFace (required for decoder compatibility)
