@@ -81,12 +81,11 @@ def visualize_force_field(normal, shear, overlay_image=None, alpha=0.6):
     shear_y_norm = np.clip((shear[..., 1] + 1) / 2, 0, 1)
     
     # Create RGB heatmap:
-    # R = shear_x (horizontal force)
-    # G = normal (vertical/normal force)
-    # B = shear_y (vertical shear force)
+    # R = Fx (shear_x), G = Fy (shear_y), B = Fz (normal)
+    # This maps per-point forces to (R,G,B) = (fx, fy, fz)
     red = (shear_x_norm * 255).astype(np.uint8)
-    green = (normal_norm * 255).astype(np.uint8)
-    blue = (shear_y_norm * 255).astype(np.uint8)
+    green = (shear_y_norm * 255).astype(np.uint8)
+    blue = (normal_norm * 255).astype(np.uint8)
     
     force_viz = np.stack([red, green, blue], axis=-1)
     

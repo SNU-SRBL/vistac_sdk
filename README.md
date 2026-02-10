@@ -69,9 +69,15 @@ python apps/live_viewer.py --serial D21273 --use_mask --mode depth --relative --
 **Prerequisites**: Download models first (`python scripts/download_models.py`)
 
 #### Force Field (Dense Heatmap)
-Visualize force distribution as RGB heatmap (R=Fx, G=Fz, B=Fy):
+Visualize force distribution as RGB heatmap (R=Fx, G=Fy, B=Fz):
 ```python
 python apps/live_viewer.py --serial D21273 --mode force_field --enable_force
+```
+
+#### PointCloud colored by Force
+Visualize point cloud colored by the force field (per-point RGB: R=Fx, G=Fy, B=Fz):
+```python
+python apps/live_viewer.py --serial D21273 --mode pointcloud_force --enable_force
 ```
 
 #### Force Vector (Arrow Overlay)
@@ -172,7 +178,7 @@ ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py \
 - `/tactile/{serial}/depth` - `sensor_msgs/Image` (mono8)
 - `/tactile/{serial}/gradient` - `sensor_msgs/Image` (32FC2)
 - `/tactile/{serial}/pointcloud` - `sensor_msgs/PointCloud2`
-- `/tactile/{serial}/force_field` - `sensor_msgs/Image` (32FC3, RGB=Fx,Fz,Fy)
+- `/tactile/{serial}/force_field` - `sensor_msgs/Image` (32FC3, RGB=Fx,Fy,Fz)  # channels: R=fx, G=fy, B=fz
 - `/tactile/{serial}/force_vector` - `geometry_msgs/WrenchStamped`
 
 ## Architecture
@@ -201,6 +207,8 @@ Only requested outputs are computed per frame, enabling efficient performance:
 - `depth`: `[H, W]` uint8, depth in mm
 - `gradient`: `[H, W, 2]` float32, surface gradients
 - `pointcloud`: `[N, 3]` float32, XYZ coordinates in meters
+- `pointcloud_colors` (optional): `[N, 3]` float32 RGB colors derived from force field (R=fx, G=fy, B=fz)
+- `pointcloud_forces` (optional): `[N, 3]` float32 per-point force values (fx, fy, fz)
 - `mask`: `[H, W]` bool, contact mask
 
 **Force outputs** (None during warmup):

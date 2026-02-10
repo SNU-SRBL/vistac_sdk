@@ -10,7 +10,8 @@ Each node streams tactile data from a specified sensor serial number and publish
 
 Launch Arguments:
 - sensors_root: Root directory for sensor configurations
-- mode: Processing mode (depth, gradient, pointcloud, force_field, force_vector) 
+- mode: Processing mode (depth, gradient, pointcloud, pointcloud_force, force_field, force_vector)
+    - `pointcloud_force` produces a pointcloud colored by force field (requires enable_force:=true)
 - model_device: Device for model execution (cuda, cpu)
 - use_mask: Whether to apply contact mask
 - rate: Publishing rate in Hz
@@ -22,6 +23,10 @@ Launch Arguments:
 - relative: Use relative depth instead of absolute (default: false)
 - mask_only_pointcloud: Only include masked region in pointcloud (default: false)
 - return_color: Include RGB color in pointcloud (default: false)
+- pointcloud_color: Which source to use for pointcloud coloring (none|image|force) (default: none)
+- pointcloud_color_format: How to encode colors in PointCloud2 (rgb_packed|r_g_b) (default: rgb_packed)
+- publish_force_fields: If true, include per-point fx,fy,fz fields in PointCloud2 (default: false)
+- force_mapping: Mapping method from force image -> points (nearest|bilinear) (default: nearest)
 - height_threshold: Contact detection height threshold in mm (default: 0.2)
 
 Usage Examples:
@@ -31,7 +36,7 @@ ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py sensors_root:=/pa
 ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py enable_force:=true mode:=force_vector
 ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py outputs:=depth,force_field,force_vector
 ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py outputs:=pointcloud,force_field return_color:=true
-ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py mode:=pointcloud mask_only_pointcloud:=true height_threshold:=0.3
+ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py mode:=pointcloud_force enable_force:=true pointcloud_color:=force publish_force_fields:=true
 '''
 
 def launch_setup(context, *args, **kwargs):
@@ -52,6 +57,10 @@ def launch_setup(context, *args, **kwargs):
     relative = LaunchConfiguration('relative').perform(context) == 'true'
     mask_only_pointcloud = LaunchConfiguration('mask_only_pointcloud').perform(context) == 'true'
     return_color = LaunchConfiguration('return_color').perform(context) == 'true'
+    pointcloud_color = LaunchConfiguration('pointcloud_color').perform(context)
+    pointcloud_color_format = LaunchConfiguration('pointcloud_color_format').perform(context)
+    publish_force_fields = LaunchConfiguration('publish_force_fields').perform(context) == 'true'
+    force_mapping = LaunchConfiguration('force_mapping').perform(context)
     height_threshold = float(LaunchConfiguration('height_threshold').perform(context))
     
     # Auto-discover sensors from sensors_root directory
@@ -96,7 +105,11 @@ def launch_setup(context, *args, **kwargs):
                 "verbose": True,
                 "enable_force": enable_force,
                 "temporal_stride": temporal_stride,
-                "outputs": outputs
+                "outputs": outputs,
+                "pointcloud_color": pointcloud_color,
+                "pointcloud_color_format": pointcloud_color_format,
+                "publish_force_fields": publish_force_fields,
+                "force_mapping": force_mapping
             }],
         )
         nodes.append(node)
@@ -169,6 +182,26 @@ def generate_launch_description():
             'return_color',
             default_value='false',
             description='Include RGB color information in pointcloud (creates PointCloud2 with color fields)'
+        ),
+        DeclareLaunchArgument(
+            'pointcloud_color',
+            default_value='none',
+            description='Source for pointcloud color: none|image|force'
+        ),
+        DeclareLaunchArgument(
+            'pointcloud_color_format',
+            default_value='rgb_packed',
+            description='PointCloud color encoding: rgb_packed|r_g_b'
+        ),
+        DeclareLaunchArgument(
+            'publish_force_fields',
+            default_value='false',
+            description='Include per-point fx,fy,fz fields in PointCloud2'
+        ),
+        DeclareLaunchArgument(
+            'force_mapping',
+            default_value='nearest',
+            description='Force -> point mapping: nearest|bilinear'
         ),
         DeclareLaunchArgument(
             'height_threshold',

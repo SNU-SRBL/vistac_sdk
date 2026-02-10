@@ -74,6 +74,9 @@ def run_live_viewer(
             outputs = ['gradient']
         elif mode == "pointcloud":
             outputs = ['pointcloud']
+        elif mode == "pointcloud_force":
+            # Combined pointcloud colored by force_field (R=Fx, G=Fz, B=Fy)
+            outputs = ['pointcloud', 'force_field', 'mask']
         elif mode == "force_field":
             outputs = ['force_field']
         elif mode == "force_vector":
@@ -261,6 +264,59 @@ def run_live_viewer(
         gui.Application.instance.run()
         processor.release()
         gui.Application.instance.quit()
+    elif mode == "pointcloud_force":
+        gui.Application.instance.initialize()
+        app = PointCloudApp()
+        running = True
+        def on_close():
+            nonlocal running
+            running = False
+        app.window.set_on_close(on_close)
+        def update_loop_force():
+            if not running:
+                return
+            frame, result_dict = processor.get_latest_output()
+            if not result_dict:
+                gui.Application.instance.post_to_main_thread(app.window, update_loop_force)
+                return
+            pc = result_dict.get('pointcloud')
+            force_data = result_dict.get('force_field')
+            colors = result_dict.get('pointcloud_colors')
+            # Use precomputed colors if available
+            if pc is not None and frame is not None:
+                if colors is None and force_data is not None:
+                    # Compute colors from force_field
+                    normal = force_data['normal']
+                    shear = force_data['shear']
+                    # Normalize to [0,255]
+                    normal_n = np.clip((normal + 1.0) / 2.0, 0.0, 1.0)
+                    sx_n = np.clip((shear[..., 0] + 1.0) / 2.0, 0.0, 1.0)
+                    sy_n = np.clip((shear[..., 1] + 1.0) / 2.0, 0.0, 1.0)
+                    # Map forces to RGB: R=Fx, G=Fy, B=Fz
+                    force_rgb = np.stack([sx_n * 255.0, sy_n * 255.0, normal_n * 255.0], axis=-1).astype(np.uint8)
+                    # Resize to frame resolution
+                    fh, fw = force_rgb.shape[:2]
+                    th, tw = frame.shape[0], frame.shape[1]
+                    if (fh, fw) != (th, tw):
+                        force_rgb = cv2.resize(force_rgb, (tw, th), interpolation=cv2.INTER_NEAREST)
+                    colors = force_rgb.reshape(-1, 3) / 255.0  # RGB floats (fx->r, fy->g, fz->b)
+                    # If pointcloud was masked (fewer points), try to apply mask
+                    mask = result_dict.get('mask')
+                    if mask is not None and pc.shape[0] != (th * tw):
+                        mask_flat = mask.ravel()
+                        if mask_flat.shape[0] == th * tw:
+                            colors = colors[mask_flat]
+                if colors is None:
+                    # Fallback to image color
+                    colors = frame.reshape(-1, 3)[:, ::-1] / 255.0
+                pc = pc * 1000.0  # to mm
+                app.update(pc, colors)
+            gui.Application.instance.post_to_main_thread(app.window, update_loop_force)
+        gui.Application.instance.post_to_main_thread(app.window, update_loop_force)
+        print("\nClose the window to quit.\n")
+        gui.Application.instance.run()
+        processor.release()
+        gui.Application.instance.quit()
     elif mode == "force_field":
         print("\nForce field visualization. Press any key to quit.\n")
         while True:
@@ -367,9 +423,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--mode", type=str, 
-        choices=["depth", "gradient", "pointcloud", "force_field", "force_vector"], 
+        choices=["depth", "gradient", "pointcloud", "pointcloud_force", "force_field", "force_vector"], 
         default="depth",
-        help="Visualization mode: depth, gradient, pointcloud, force_field, or force_vector"
+        help="Visualization mode: depth, gradient, pointcloud, pointcloud_force, force_field, or force_vector"
     )
     parser.add_argument(
         "--refine_mask", action="store_true", default=False,

@@ -199,6 +199,59 @@ class TactileProcessor:
                     result['force_field'] = force_result['force_field']
                 if 'force_vector' in outputs:
                     result['force_vector'] = force_result['force_vector']
+
+                # If pointcloud and force_field requested together, compute per-point colors
+                if 'pointcloud' in result and result['pointcloud'] is not None and 'force_field' in outputs:
+                    try:
+                        import cv2 as _cv2
+                        normal = force_result['force_field']['normal']  # [224,224]
+                        shear = force_result['force_field']['shear']    # [224,224,2]
+                        # Build RGB: R=Fx, G=Fz, B=Fy
+                        normal_n = np.clip((normal + 1.0) / 2.0, 0.0, 1.0)
+                        sx_n = np.clip((shear[..., 0] + 1.0) / 2.0, 0.0, 1.0)
+                        sy_n = np.clip((shear[..., 1] + 1.0) / 2.0, 0.0, 1.0)
+                        # Map forces to RGB: R=Fx, G=Fy, B=Fz (fx->r, fy->g, fz->b)
+                        force_rgb = np.stack([sx_n * 255.0, sy_n * 255.0, normal_n * 255.0], axis=-1).astype(np.uint8)
+                        # Resize to input image resolution
+                        th, tw = image.shape[0], image.shape[1]
+                        fh, fw = force_rgb.shape[:2]
+                        if (fh, fw) != (th, tw):
+                            force_rgb = _cv2.resize(force_rgb, (tw, th), interpolation=_cv2.INTER_NEAREST)
+                        colors_flat = force_rgb.reshape(-1, 3) / 255.0
+                        pc = result['pointcloud']
+                        # If pointcloud was masked (fewer points), use mask if available
+                        mask = result.get('mask')
+                        if mask is not None and pc.shape[0] != (th * tw):
+                            mask_flat = mask.ravel()
+                            if mask_flat.shape[0] == th * tw:
+                                colors_flat = colors_flat[mask_flat]
+                        # Store per-point colors in result dict
+                        result['pointcloud_colors'] = colors_flat
+
+                        # Also store raw per-point force values (fx, fy, fz) in same order
+                        # fx = shear_x, fy = shear_y, fz = normal
+                        fx = shear[..., 0]
+                        fy = shear[..., 1]
+                        fz = normal
+                        # Resize and flatten similar to colors
+                        fx_img = fx
+                        fy_img = fy
+                        fz_img = fz
+                        if (fx_img.shape[0], fx_img.shape[1]) != (th, tw):
+                            fx_img = _cv2.resize(fx_img, (tw, th), interpolation=_cv2.INTER_NEAREST)
+                            fy_img = _cv2.resize(fy_img, (tw, th), interpolation=_cv2.INTER_NEAREST)
+                            fz_img = _cv2.resize(fz_img, (tw, th), interpolation=_cv2.INTER_NEAREST)
+                        fx_flat = fx_img.reshape(-1)
+                        fy_flat = fy_img.reshape(-1)
+                        fz_flat = fz_img.reshape(-1)
+                        if mask is not None and pc.shape[0] != (th * tw):
+                            fx_flat = fx_flat[mask_flat]
+                            fy_flat = fy_flat[mask_flat]
+                            fz_flat = fz_flat[mask_flat]
+                        result['pointcloud_forces'] = np.stack([fx_flat, fy_flat, fz_flat], axis=1)
+                    except Exception:
+                        # Fail silently and do not provide additional pointcloud fields if error occurs
+                        pass
         
         return result
     

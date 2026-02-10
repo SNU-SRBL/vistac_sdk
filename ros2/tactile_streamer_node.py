@@ -56,6 +56,10 @@ class TactileStreamerNode(Node):
         self.declare_parameter('relative_scale', 0.5)
         self.declare_parameter('mask_only_pointcloud', False)
         self.declare_parameter('return_color', False)
+        self.declare_parameter('pointcloud_color', 'none')  # none|image|force
+        self.declare_parameter('pointcloud_color_format', 'rgb_packed')  # rgb_packed|r_g_b
+        self.declare_parameter('publish_force_fields', False)
+        self.declare_parameter('force_mapping', 'nearest')  # nearest|bilinear
         self.declare_parameter('color_dist_threshold', 15)
         self.declare_parameter('height_threshold', 0.2)
         self.declare_parameter('topic', 'tactile/depth')
@@ -77,6 +81,10 @@ class TactileStreamerNode(Node):
         relative_scale = self.get_parameter('relative_scale').get_parameter_value().double_value
         mask_only_pointcloud = self.get_parameter('mask_only_pointcloud').get_parameter_value().bool_value
         return_color = self.get_parameter('return_color').get_parameter_value().bool_value
+        pointcloud_color = self.get_parameter('pointcloud_color').get_parameter_value().string_value
+        pointcloud_color_format = self.get_parameter('pointcloud_color_format').get_parameter_value().string_value
+        publish_force_fields = self.get_parameter('publish_force_fields').get_parameter_value().bool_value
+        force_mapping = self.get_parameter('force_mapping').get_parameter_value().string_value
         color_dist_threshold = self.get_parameter('color_dist_threshold').get_parameter_value().integer_value
         height_threshold = self.get_parameter('height_threshold').get_parameter_value().double_value
         topic = self.get_parameter('topic').get_parameter_value().string_value
@@ -86,6 +94,10 @@ class TactileStreamerNode(Node):
         # Store mode and return_color for message handling
         self.mode = mode
         self.return_color = return_color
+        self.pointcloud_color = pointcloud_color
+        self.pointcloud_color_format = pointcloud_color_format
+        self.publish_force_fields = publish_force_fields
+        self.force_mapping = force_mapping
 
         # Determine outputs based on explicit parameter or mode
         if outputs_param:
@@ -98,6 +110,12 @@ class TactileStreamerNode(Node):
                 outputs = ['gradient']
             elif mode == 'pointcloud':
                 outputs = ['pointcloud']
+            elif mode == 'pointcloud_force':
+                # Combined pointcloud colored by force_field
+                outputs = ['pointcloud', 'force_field', 'mask']
+                # Default to using force colors for this mode if unspecified
+                if self.pointcloud_color == 'none':
+                    self.pointcloud_color = 'force'
             elif mode == 'force_field':
                 outputs = ['force_field']
             elif mode == 'force_vector':
@@ -191,12 +209,19 @@ class TactileStreamerNode(Node):
             
             if output_name == 'pointcloud':
                 # Handle pointcloud output
-                if isinstance(result, tuple) and self.return_color:
+                pc = result
+                # Prefer colors provided in result dict (computed from force_field)
+                colors = result_dict.get('pointcloud_colors')
+                forces = result_dict.get('pointcloud_forces')  # Nx3 array of raw forces (fx,fy,fz)
+
+                if colors is not None:
+                    msg = self.create_pointcloud2_msg(pc, header, colors=colors, color_format=self.pointcloud_color_format, forces=forces if self.publish_force_fields else None)
+                elif isinstance(result, tuple) and self.return_color:
                     pc, colors = result
-                    msg = self.create_pointcloud2_msg(pc, header, colors)
+                    msg = self.create_pointcloud2_msg(pc, header, colors=colors, color_format=self.pointcloud_color_format)
                 else:
-                    pc = result
                     msg = self.create_pointcloud2_msg(pc, header)
+
                 if msg is not None:
                     publisher.publish(msg)
                 
@@ -222,11 +247,12 @@ class TactileStreamerNode(Node):
                     
                     if normal is not None and shear is not None:
                         # Create 3-channel RGB image: R=Fx, G=Fz, B=Fy
+                        # Map forces to RGB image for publishing: R=Fx, G=Fy, B=Fz
                         force_rgb = np.zeros((normal.shape[0], normal.shape[1], 3), dtype=np.float32)
-                        force_rgb[:, :, 0] = shear[:, :, 0]  # Fx (horizontal shear)
-                        force_rgb[:, :, 1] = normal           # Fz (normal force)
-                        force_rgb[:, :, 2] = shear[:, :, 1]  # Fy (vertical shear)
-                        
+                        force_rgb[:, :, 0] = shear[:, :, 0]  # Fx
+                        force_rgb[:, :, 1] = shear[:, :, 1]  # Fy
+                        force_rgb[:, :, 2] = normal         # Fz
+
                         msg = self.bridge.cv2_to_imgmsg(force_rgb, encoding='32FC3')
                         msg.header = header
                         publisher.publish(msg)
@@ -248,44 +274,83 @@ class TactileStreamerNode(Node):
                     msg.wrench.torque.z = 0.0
                     publisher.publish(msg)
 
-    def create_pointcloud2_msg(self, points, header, colors=None):
-        """Create a PointCloud2 message from numpy point array."""
+    def create_pointcloud2_msg(self, points, header, colors=None, color_format='rgb_packed', forces=None):
+        """Create a PointCloud2 message from numpy point array.
+
+        Args:
+            points: (N,3) float32
+            colors: optional (N,3) float in 0..1 RGB
+            color_format: 'rgb_packed' or 'r_g_b'
+            forces: optional (N,3) float32 array of (fx,fy,fz)
+        """
         if points.shape[1] != 3:
             self.get_logger().error(f"Expected points with shape (N, 3), got {points.shape}")
             return None
-            
-        # Define fields
+
+        n = len(points)
+
+        fields = [
+            PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+            PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+            PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1)
+        ]
+
+        # Prepare combined array columns
+        columns = [points.astype(np.float32)]
+
+        # Colors
         if colors is not None:
-            fields = [
-                PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
-                PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
-                PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
-                PointField(name='intensity', offset=12, datatype=PointField.FLOAT32, count=1)
-            ]
-            point_step = 16
-            # Combine points and colors
-            combined = np.hstack([points.astype(np.float32), colors.astype(np.float32)])
+            cols = (np.clip(colors, 0.0, 1.0) * 255.0).astype(np.uint8)
+            if color_format == 'rgb_packed':
+                # Pack into single uint32 and reinterpret as float32
+                r = cols[:, 0].astype(np.uint32)
+                g = cols[:, 1].astype(np.uint32)
+                b = cols[:, 2].astype(np.uint32)
+                rgb_uint32 = (r << 16) | (g << 8) | b
+                rgb_float32 = rgb_uint32.view(np.float32)
+                fields.append(PointField(name='rgb', offset=12, datatype=PointField.FLOAT32, count=1))
+                columns.append(rgb_float32.reshape(-1, 1))
+                point_step = 16
+            else:
+                # r, g, b as float32 fields
+                fields.append(PointField(name='r', offset=12, datatype=PointField.FLOAT32, count=1))
+                fields.append(PointField(name='g', offset=16, datatype=PointField.FLOAT32, count=1))
+                fields.append(PointField(name='b', offset=20, datatype=PointField.FLOAT32, count=1))
+                columns.append(cols.astype(np.float32))
+                point_step = 24
         else:
-            fields = [
-                PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
-                PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
-                PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1)
-            ]
             point_step = 12
-            combined = points.astype(np.float32)
-        
+
+        # Forces as additional float fields (fx, fy, fz)
+        if forces is not None:
+            forces_arr = np.asarray(forces, dtype=np.float32)
+            if forces_arr.shape[0] != n or forces_arr.shape[1] != 3:
+                self.get_logger().error("Forces must have shape (N, 3)")
+                forces = None
+            else:
+                # Add fx, fy, fz fields
+                offset = point_step
+                fields.append(PointField(name='fx', offset=offset, datatype=PointField.FLOAT32, count=1))
+                fields.append(PointField(name='fy', offset=offset + 4, datatype=PointField.FLOAT32, count=1))
+                fields.append(PointField(name='fz', offset=offset + 8, datatype=PointField.FLOAT32, count=1))
+                columns.append(forces_arr)
+                point_step = offset + 12
+
+        # Construct combined array
+        combined = np.hstack(columns)
+
         # Create PointCloud2 message
         msg = PointCloud2()
         msg.header = header
         msg.height = 1
-        msg.width = len(points)
+        msg.width = n
         msg.fields = fields
         msg.is_bigendian = False
         msg.point_step = point_step
-        msg.row_step = point_step * len(points)
+        msg.row_step = point_step * n
         msg.data = combined.tobytes()
         msg.is_dense = True
-        
+
         return msg
 
     def destroy_node(self):
