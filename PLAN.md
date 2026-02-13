@@ -1490,6 +1490,12 @@ print(f"Decoder keys: {decoder.keys()}")
    - Not inference, official documentation
    - Added to verification section
 
+7. **Force baseline & scaling (runtime)** - ADDED
+   - `force_vector` baseline subtraction implemented: SDK now measures a no-contact baseline (model output on `background, background`) during `load_background()` and subtracts it from subsequent `force_vector` outputs (runtime bias removal). ✅
+   - `force_field` (dense heatmap) **NOT** baseline-subtracted to remain consistent with Sparsh demos; Sparsh uses background templates for masking/normalization rather than per-pixel subtraction. ✅
+   - `force_scale` (conversion from normalized units → physical units) and visual scaling for `force_field` are **planned** but intentionally deferred for a later session (no changes in this iteration). ⏳
+   - Unit tests added for baseline subtraction and behavior validated (tests pass).
+
 ### Design Decisions Affirmed
 
 - **No force calibration**: Intentional MVP scope decision (not missing feature)

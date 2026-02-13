@@ -264,6 +264,41 @@ class TestForceEstimator(unittest.TestCase):
         # Check range [0, 1]
         self.assertGreaterEqual(tensor.min().item(), 0.0)
         self.assertLessEqual(tensor.max().item(), 1.0)
+
+    @unittest.skipUnless(os.path.exists('models/sparsh_dino_base_encoder.ckpt'), "Model files not available")
+    def test_baseline_subtraction(self):
+        """Ensure force_vector baseline (from background) is subtracted from outputs."""
+        estimator = ForceEstimator(
+            encoder_path=self.encoder_path,
+            decoder_path=self.decoder_path,
+            device='cpu',
+            temporal_stride=5,
+        )
+        estimator.load_background(self.background)
+        # baseline must be stored
+        self.assertIn('fx', estimator.force_vector_baseline)
+        self.assertIn('fy', estimator.force_vector_baseline)
+        self.assertIn('fz', estimator.force_vector_baseline)
+
+        # Clear temporal buffer and compute result without baseline by forcing baseline=0
+        estimator.temporal_buffer.clear()
+        estimator.force_vector_baseline = {'fx': 0.0, 'fy': 0.0, 'fz': 0.0}
+        for i in range(6):
+            r_no = estimator.estimate(self.image, timestamp=float(i))
+        self.assertIsNotNone(r_no)
+
+        # Reset buffer, restore computed baseline and compute again
+        estimator.temporal_buffer.clear()
+        estimator.load_background(self.background)  # recompute baseline
+        for i in range(6):
+            r_yes = estimator.estimate(self.image, timestamp=float(i))
+        self.assertIsNotNone(r_yes)
+
+        # Check that baseline subtraction was applied approximately
+        b = estimator.force_vector_baseline
+        self.assertAlmostEqual(r_no['force_vector']['fx'] - b['fx'], r_yes['force_vector']['fx'], places=5)
+        self.assertAlmostEqual(r_no['force_vector']['fy'] - b['fy'], r_yes['force_vector']['fy'], places=5)
+        self.assertAlmostEqual(r_no['force_vector']['fz'] - b['fz'], r_yes['force_vector']['fz'], places=5)
     
     def test_preprocessing_without_background_raises_error(self):
         """Test that preprocessing without background raises error."""

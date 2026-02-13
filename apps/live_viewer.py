@@ -153,9 +153,11 @@ def run_live_viewer(
                     else:
                         force_vis = visualize_force_field(
                             output_data['normal'],
-                            output_data['shear'],
-                            overlay_image=frame
+                            output_data['shear']
                         )
+                        # Resize force visualization to match camera frame for panel display
+                        if force_vis.shape[:2] != (frame.shape[0], frame.shape[1]):
+                            force_vis = cv2.resize(force_vis, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
                         vis_panels.append(force_vis)
                 
                 elif output_name == 'force_vector':
@@ -170,7 +172,7 @@ def run_live_viewer(
                             output_data['fx'],
                             output_data['fy'],
                             output_data['fz'],
-                            overlay_image=frame
+                            frame
                         )
                         vis_panels.append(force_vis)
             
@@ -338,19 +340,14 @@ def run_live_viewer(
                 combined = np.hstack([raw_vis, warmup_panel])
                 cv2.imshow(device_type, combined)
             else:
-                # Visualize force field as RGB heatmap overlaid on raw image
+                # Visualize force field as RGB heatmap (force only, no overlay)
                 force_vis = visualize_force_field(
                     force_data['normal'],
-                    force_data['shear'],
-                    overlay_image=frame,
-                    alpha=0.6
+                    force_data['shear']
                 )
-                if frame.ndim == 2:
-                    raw_vis = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-                else:
-                    raw_vis = frame
-                combined = np.hstack([raw_vis, force_vis])
-                cv2.imshow(device_type, combined)
+                # Ensure force_vis matches frame resolution before stacking
+                if force_vis.shape[:2] != (frame.shape[0], frame.shape[1]):
+                    force_vis = cv2.resize(force_vis, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
             
             key = cv2.waitKey(1)
             if key != -1:
@@ -383,7 +380,7 @@ def run_live_viewer(
                     force_data['fx'],
                     force_data['fy'],
                     force_data['fz'],
-                    overlay_image=frame,
+                    frame,
                     arrow_scale=50.0,
                     arrow_color=(0, 255, 0),
                     arrow_thickness=3

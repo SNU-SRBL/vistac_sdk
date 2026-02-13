@@ -12,6 +12,7 @@ import sys
 import types
 
 import numpy as np
+import cv2
 from PIL import Image
 import torch
 import torch.nn as nn
@@ -476,12 +477,38 @@ class ForceEstimator:
         print(f"Force estimator initialized on {self.device}")
     
     def load_background(self, background: np.ndarray):
-        """Load background image for subtraction.
-        
+        """Load background image for subtraction and compute no-contact baseline.
+
+        The baseline is computed by running the model on a background pair and
+        saved to `self.force_vector_baseline`. This baseline is subtracted from
+        `force_vector` outputs to remove sensor/model bias.
+
         Args:
             background: [H, W, 3] BGR background image (uint8)
         """
         self.background = background.copy()
+
+        # Compute baseline force vector from background (no-contact) frames.
+        # We run a single forward pass with bg / bg to estimate steady-state bias.
+        try:
+            # Prepare input and run encoder+decoder on CPU to be safe
+            input_tensor = self._preprocess(self.background, self.background).to(self.device)
+            with torch.no_grad():
+                _ = self.encoder(input_tensor)
+                intermediate_features = self.encoder.get_intermediate_features()
+                normal, shear = self.decoder(intermediate_features)
+                normal = normal.squeeze(0).squeeze(0).cpu().numpy()
+                shear = shear.squeeze(0).permute(1, 2, 0).cpu().numpy()
+
+            # Aggregate baseline vector (mean over spatial dims)
+            baseline_fz = float(np.mean(normal))
+            baseline_fx = float(np.mean(shear[:, :, 0]))
+            baseline_fy = float(np.mean(shear[:, :, 1]))
+
+            self.force_vector_baseline = {'fx': baseline_fx, 'fy': baseline_fy, 'fz': baseline_fz}
+        except Exception:
+            # If baseline computation fails for any reason, default to zero baseline
+            self.force_vector_baseline = {'fx': 0.0, 'fy': 0.0, 'fz': 0.0}
     
     def _preprocess(self, img_t: np.ndarray, img_t_minus: np.ndarray) -> torch.Tensor:
         """Preprocess temporal pair for force estimation.
@@ -507,9 +534,12 @@ class ForceEstimator:
         img_t_diff = subtract_bg(img_t, self.background, self.bg_offset)
         img_t_minus_diff = subtract_bg(img_t_minus, self.background, self.bg_offset)
         
-        # Convert to PIL RGB
-        img_t_pil = Image.fromarray(img_t_diff).convert("RGB")
-        img_t_minus_pil = Image.fromarray(img_t_minus_diff).convert("RGB")
+        # Convert to RGB PIL images (input frames from camera are BGR)
+        # Sparsh expects RGB images — convert from BGR -> RGB first.
+        img_t_rgb = cv2.cvtColor(img_t_diff, cv2.COLOR_BGR2RGB)
+        img_t_minus_rgb = cv2.cvtColor(img_t_minus_diff, cv2.COLOR_BGR2RGB)
+        img_t_pil = Image.fromarray(img_t_rgb).convert("RGB")
+        img_t_minus_pil = Image.fromarray(img_t_minus_rgb).convert("RGB")
         
         # Resize and convert to tensor
         tensor_t = self.transform(img_t_pil)         # [3, 224, 224]
@@ -582,7 +612,14 @@ class ForceEstimator:
         fz = float(np.mean(normal))
         fx = float(np.mean(shear[:, :, 0]))
         fy = float(np.mean(shear[:, :, 1]))
-        
+
+        # Subtract baseline (if available) to remove sensor/model bias
+        baseline = getattr(self, 'force_vector_baseline', None)
+        if baseline is not None:
+            fx = fx - float(baseline.get('fx', 0.0))
+            fy = fy - float(baseline.get('fy', 0.0))
+            fz = fz - float(baseline.get('fz', 0.0))
+
         return {
             'force_field': {
                 'normal': normal,
