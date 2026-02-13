@@ -155,12 +155,9 @@ def run_live_viewer(
                                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
                         vis_panels.append(warmup_panel)
                     else:
-                        # `LiveTactileProcessor` now applies `force_field_scale`; just clip and visualize
+                        # `LiveTactileProcessor` already canonicalizes/clips and applies `force_field_scale`
                         nf = output_data['normal'].astype(np.float32)
                         sf = output_data['shear'].astype(np.float32)
-                        # Clip to [-1, 1] to avoid visualization overflow
-                        nf = np.clip(nf, -1.0, 1.0)
-                        sf = np.clip(sf, -1.0, 1.0)
                         force_vis = visualize_force_field(nf, sf)
                         # Resize force visualization to match camera frame for panel display
                         if force_vis.shape[:2] != (frame.shape[0], frame.shape[1]):
@@ -301,7 +298,8 @@ def run_live_viewer(
                     normal = force_data['normal']
                     shear = force_data['shear']
                     # Normalize to [0,255]
-                    normal_n = np.clip((normal + 1.0) / 2.0, 0.0, 1.0)
+                    # normal is already in [0,1]; shear visual mapping uses (x+1)/2
+                    normal_n = np.clip(normal, 0.0, 1.0)
                     sx_n = np.clip((shear[..., 0] + 1.0) / 2.0, 0.0, 1.0)
                     sy_n = np.clip((shear[..., 1] + 1.0) / 2.0, 0.0, 1.0)
                     # Map forces to RGB: R=Fx, G=Fy, B=Fz
@@ -351,11 +349,9 @@ def run_live_viewer(
                 cv2.imshow(device_type, combined)
             else:
                 # Visualize force field as RGB heatmap (force only, no overlay)
-                        # Apply runtime RGB scaling (user-configurable) after baseline
+                        # `LiveTactileProcessor` canonicalizes force_field; show it directly
                 nf = force_data['normal'].astype(np.float32)
                 sf = force_data['shear'].astype(np.float32)
-                nf = np.clip(nf, -1.0, 1.0)
-                sf = np.clip(sf, -1.0, 1.0)
                 force_vis = visualize_force_field(nf, sf)
                 # Ensure force_vis matches frame resolution before stacking
                 if force_vis.shape[:2] != (frame.shape[0], frame.shape[1]):

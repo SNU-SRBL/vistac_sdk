@@ -359,6 +359,9 @@ class ForceFieldDecoder(nn.Module):
             nn.ReLU(),
             nn.Conv2d(out_dim // 2, 2, kernel_size=1)
         )
+
+        # Match Sparsh head scaling for shear (tanh * scale_flow)
+        self.scale_flow = 20.0
     
     def forward(self, intermediate_features: list) -> Tuple[torch.Tensor, torch.Tensor]:
         """Decode intermediate features to force fields.
@@ -388,10 +391,16 @@ class ForceFieldDecoder(nn.Module):
         if fused.shape[-2:] != (224, 224):
             fused = F.interpolate(fused, size=(224, 224), mode='bilinear', align_corners=False)
         
-        # Predict force fields
+        # Predict force fields (Sparsh head semantics):
+        # - normal: sigmoid -> [0, 1]
+        # - shear: tanh * scale_flow -> roughly [-scale_flow, +scale_flow]
         normal = self.head_normal(fused)  # [B, 1, 224, 224]
         shear = self.head_shear(fused)    # [B, 2, 224, 224]
-        
+
+        # Apply activations matching Sparsh NormalShearHead
+        normal = torch.sigmoid(normal)
+        shear = torch.tanh(shear) * getattr(self, 'scale_flow', 20.0)
+
         return normal, shear
 
 

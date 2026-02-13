@@ -22,9 +22,9 @@ This integration leverages **Sparsh** (https://github.com/facebookresearch/spars
 ## Findings (updated — 2026-02-13) ✅
 
 ### Executive summary
-- The SDK now returns **normalized** `force_field` from the estimator (no `force_field_physical`). Visual scaling and all painting (image + pointcloud coloring) are applied only at the live/presentation layer (`LiveTactileProcessor`).
+- The SDK now returns **Sparsh‑native** `force_field` from the estimator: `normal` matches Sparsh sigmoid ([0,1]) and `shear` preserves the model's output scale (tanh × scale_flow). All clipping, normalization for visualization, and `force_field_scale` are applied only at the live/presentation layer (`LiveTactileProcessor`).
 - `force_vector` continues to expose a **physical** per-axis scaled value (`force_vector_physical`) using `force_vector_scale` from YAML — that behavior is unchanged.
-- Defensive guard prevents applying `force_field_scale` when the estimator output already appears scaled (observed when |value| > 2.0). Unit tests pass; one diagnostic remains: intermittent model/baseline outputs with magnitude > 2.0.
+- The previous ad‑hoc “2.0” guard has been removed. Instead, `LiveTactileProcessor` canonicalizes Sparsh outputs for presentation by clamping `normal` → [0,1] and `shear` → [-1,1] (visualization clamp) before applying `force_field_scale`. Unit tests updated to validate Sparsh semantics and live‑layer clipping; outstanding diagnostic: intermittent outliers still logged and under investigation.
 
 ### Full computation flow (raw → visualization)
 1. Raw capture
@@ -49,14 +49,14 @@ This integration leverages **Sparsh** (https://github.com/facebookresearch/spars
 
 ### Current situation — what is implemented and validated
 - Centralized visual scaling and painting in `LiveTactileProcessor` — completed.
-- `TactileProcessor` returns raw `force_field` (no painting) — completed.
-- `ForceEstimator` returns normalized `force_field` and computes `force_vector_physical` using `force_vector_scale` — completed.
+- `TactileProcessor` returns raw `force_field` (model-native Sparsh outputs) — completed.
+- `ForceEstimator` returns Sparsh‑native `force_field` (normal in [0,1]; shear in model units) and computes `force_vector_physical` using `force_vector_scale` — completed.
 - Viewer and ROS parameters expose `force_field_scale` and `force_field_baseline` — completed.
-- Unit tests updated and passing (all tests green at time of change). ✅
-- Outstanding diagnostic: occasional estimator outputs whose absolute magnitudes exceed expected range (observed > 2.0). This triggers the Live-layer guard and a warning; root cause (model vs. baseline vs. pre-scaling) is still under investigation.
+- Unit tests updated and passing for decoder semantics and live-layer behavior (new tests added). ✅
+- Outstanding diagnostic: intermittent outliers can still occur; we added stricter tests and logging to detect/reproduce them.
 
 ### Full structure — who does what (quick reference)
-- `vistac_sdk/vistac_sdk/vistac_force.py` — ForceEstimator (model inference, baseline subtraction, returns normalized fields, computes force_vector_physical).
+- `vistac_sdk/vistac_sdk/vistac_force.py` — ForceEstimator (model inference, baseline subtraction). **Now returns Sparsh‑native fields**: `normal` in [0,1] (sigmoid), `shear` in model units (tanh*scale_flow). `force_vector_physical` still computed from aggregated raw fields.
 - `vistac_sdk/vistac_sdk/tactile_processor.py` — data-layer processor; prepares inputs and returns raw outputs (depth, force_field, force_vector, pointcloud geometry).
 - `vistac_sdk/vistac_sdk/live_core.py` — LiveTactileProcessor; runtime presentation, applies `force_field_scale`, recomputes painting for images/pointclouds, exposes runtime flags.
 - `apps/live_viewer.py` — interactive visualization; receives live outputs and renders images/pointclouds.
@@ -73,8 +73,9 @@ This integration leverages **Sparsh** (https://github.com/facebookresearch/spars
   - Per-pixel physical scaling would invite unit mismatch and risk double-scaling in downstream consumers.
 - Visual scaling invariant:
   - `force_field_scale` is a runtime visual multiplier and must be applied exactly once (done in `LiveTactileProcessor`).
-- Double‑scaling guard:
-  - If estimator outputs already look scaled (max_abs > 2.0), the live layer refuses to apply `force_field_scale` and emits a warning.
+- Live-layer canonicalization (new):
+  - `ForceEstimator` returns Sparsh‑native outputs.
+  - `LiveTactileProcessor` canonicalizes for presentation by clamping `normal` → [0,1] and `shear` → [-1,1] before applying `force_field_scale` and recomputing painting.
 - Pointcloud/image consistency:
   - After any visual scaling, `pointcloud_colors` and `pointcloud_forces` are recomputed from the scaled `force_field` so imagery and pointclouds match.
 
@@ -1345,9 +1346,10 @@ vistac_sdk/
   - `tactile_processor.py`, `vistac_force.py`, `temporal_buffer.py`
   - `download_models.py`, `models/`, `docs/`
   
-- **UPDATED**: 8 files
+- **UPDATED**: 12 files
   - README.md, setup.py, requirements.txt, package.xml
-  - `__init__.py`, `live_core.py`, `live_viewer.py`, `viz_utils.py`
+  - `__init__.py`, `live_core.py` (centralized clipping & visual canonicalization), `vistac_force.py` (now matches Sparsh head activations), `apps/live_viewer.py` (removed redundant clipping), `viz_utils.py`
+  - `tests/test_force_estimator.py` (updated decoder semantics), `tests/test_viz_utils.py`
   - ROS2 node/launch, sensor YAMLs
   
 - **REFACTORED**: 1 file
@@ -1564,9 +1566,14 @@ print(f"Decoder keys: {decoder.keys()}")
 
 7. **Force baseline & scaling (runtime)** - ADDED
    - `force_vector` baseline subtraction implemented: SDK now measures a no-contact baseline (model output on `background, background`) during `load_background()` and subtracts it from subsequent `force_vector` outputs (runtime bias removal). ✅
-   - `force_field` (dense heatmap) **runtime baseline subtraction will be added as an optional, configurable feature**: the SDK will compute a per‑pixel background template during `load_background()` and subtract it from subsequent `force_field` outputs when enabled (default: **disabled** to preserve Sparsh demo parity). This is a runtime correction only (no persistent YAML offset). ✅
-   - `force_vector_scale` (conversion from normalized units → physical units) will be added to sensor YAMLs (per‑axis scaling only). `force_offset` (persistent YAML offset) will **not** be added — runtime baseline subtraction remains the zeroing mechanism. Visual scaling for `force_field` is strictly for visualization (no physical‑unit calibration is applied). ⏳
+   - `force_field` (dense heatmap) **runtime baseline subtraction available as optional, configurable feature**: the SDK computes a per‑pixel background template during `load_background()` and subtracts it from subsequent `force_field` outputs when enabled (default: **disabled** to preserve Sparsh demo parity). This is a runtime correction only (no persistent YAML offset). ✅
+   - `force_vector_scale` (conversion from model units → physical units) is stored in sensor YAMLs (per‑axis scaling). `force_offset` (persistent YAML offset) is **not** added — runtime baseline subtraction remains the zeroing mechanism. Visual scaling for `force_field` is strictly for visualization (no physical‑unit calibration is applied). ⏳
    - Unit tests added for `force_vector` baseline subtraction and optional `force_field` baseline subtraction; behavior validated (tests pass).
+
+8. **Estimator semantics & presentation canonicalization** - FIXED ✅
+   - `ForceEstimator` now returns **Sparsh‑native outputs** (normal: sigmoid in [0,1]; shear: tanh * scale_flow in model units). This preserves model semantics for diagnostics and calibration.
+   - The previous ad‑hoc 2.0 heuristic guard was removed. `LiveTactileProcessor` now **centralizes presentation logic**: it clamps `normal`→[0,1], `shear`→[-1,1] for visualization, then applies `force_field_scale` and recomputes `pointcloud_colors`/`pointcloud_forces` accordingly.
+   - Unit tests updated: decoder activation/range tests and live-layer clipping/scale tests added. Logging added for clipped/outlier frames so model/pathology can be diagnosed.
 
 ### Design Decisions Affirmed
 

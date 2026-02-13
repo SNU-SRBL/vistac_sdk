@@ -103,7 +103,11 @@ class TestForceFieldDecoder(unittest.TestCase):
         self.assertEqual(shear.shape, (batch_size, 2, 224, 224))
     
     def test_output_types(self):
-        """Test decoder outputs are float tensors."""
+        """Test decoder outputs are float tensors and follow Sparsh activations.
+
+        - normal should be in [0, 1] (sigmoid)
+        - shear should be bounded by the decoder.scale_flow after tanh
+        """
         intermediate_features = [
             torch.randn(1, 197, 768) for _ in range(4)
         ]
@@ -113,6 +117,14 @@ class TestForceFieldDecoder(unittest.TestCase):
         
         self.assertTrue(normal.dtype == torch.float32)
         self.assertTrue(shear.dtype == torch.float32)
+
+        # normal in [0, 1]
+        self.assertGreaterEqual(float(normal.min()), 0.0)
+        self.assertLessEqual(float(normal.max()), 1.0)
+
+        # shear should be within [-scale_flow, +scale_flow]
+        scale_flow = getattr(self.decoder, 'scale_flow', 20.0)
+        self.assertLessEqual(float(torch.abs(shear).max()), scale_flow + 1e-6)
 
 
 class TestForceEstimator(unittest.TestCase):
