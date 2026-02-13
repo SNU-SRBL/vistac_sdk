@@ -18,3 +18,4 @@ force:
   encoder: sparsh-dino-base  # Required for decoder compatibility
   decoder: sparsh-digit-forcefield
   bg_offset: 0.5  # Background subtraction offset
+  force_vector_scale: [2.0, 2.0, 2.0]  # Per-axis scale to convert normalized force_vector -> Newtons

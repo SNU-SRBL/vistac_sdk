@@ -8,6 +8,7 @@ import numpy as np
 import os
 
 from vistac_sdk.tactile_processor import TactileProcessor
+from vistac_sdk.utils import load_config
 
 
 class TestTactileProcessorInit(unittest.TestCase):
@@ -92,6 +93,15 @@ class TestTactileProcessorInit(unittest.TestCase):
         processor.set_ppmm(25.0)
         self.assertEqual(processor.ppmm, 25.0)
 
+    def test_sensor_yaml_force_keys(self):
+        """Verify sensor YAML contains new force keys (`force_field_baseline`, `force_vector_scale`)."""
+        cfg = load_config(config_path='sensors/D21242/D21242.yaml')
+        self.assertIn('force', cfg)
+        force_cfg = cfg['force']
+        # force_field_baseline is runtime-only; YAML should not contain it
+        self.assertNotIn('force_field_baseline', force_cfg)
+        self.assertIn('force_vector_scale', force_cfg)
+        self.assertEqual(force_cfg['force_vector_scale'], [2.0, 2.0, 2.0])
 
 class TestTactileProcessorBackground(unittest.TestCase):
     """Test background loading."""
@@ -223,6 +233,18 @@ class TestTactileProcessorProcess(unittest.TestCase):
         self.assertIn('force_vector', result)
         self.assertIsNone(result['force_field'])
         self.assertIsNone(result['force_vector'])
+
+    def test_force_field_baseline_via_constructor(self):
+        """Ensure TactileProcessor passes force_field_baseline to the estimator."""
+        processor = TactileProcessor(
+            model_path=None,
+            enable_depth=False,
+            enable_force=True,
+            device='cpu',
+            temporal_stride=5,
+            force_field_baseline=True
+        )
+        self.assertTrue(processor.force_estimator.force_field_baseline_enabled)
     
     def test_process_force_after_warmup(self):
         """Test force estimation after warmup."""
@@ -252,6 +274,7 @@ class TestTactileProcessorProcess(unittest.TestCase):
         
         self.assertIsNotNone(result['force_field'])
         self.assertIsNotNone(result['force_vector'])
+        self.assertIn('force_vector_physical', result)
         self.assertIn('normal', result['force_field'])
         self.assertIn('shear', result['force_field'])
         self.assertEqual(result['force_field']['normal'].shape, (224, 224))
@@ -259,6 +282,11 @@ class TestTactileProcessorProcess(unittest.TestCase):
         self.assertIn('fx', result['force_vector'])
         self.assertIn('fy', result['force_vector'])
         self.assertIn('fz', result['force_vector'])
+        self.assertIn('fx', result['force_vector_physical'])
+        self.assertIn('fy', result['force_vector_physical'])
+        self.assertIn('fz', result['force_vector_physical'])
+
+
     
     def test_process_invalid_output_depth_disabled(self):
         """Test error when requesting depth output with depth disabled."""

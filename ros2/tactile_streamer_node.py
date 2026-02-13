@@ -62,6 +62,9 @@ class TactileStreamerNode(Node):
         self.declare_parameter('force_mapping', 'nearest')  # nearest|bilinear
         self.declare_parameter('color_dist_threshold', 15)
         self.declare_parameter('height_threshold', 0.2)
+        # Make force_field options available to ROS users (applies SDK-wide)
+        self.declare_parameter('force_field_scale', 1.0)
+        self.declare_parameter('force_field_baseline', False)
         self.declare_parameter('topic', 'tactile/depth')
         self.declare_parameter('rate', 15.0)
         self.declare_parameter('verbose', True)
@@ -87,6 +90,9 @@ class TactileStreamerNode(Node):
         force_mapping = self.get_parameter('force_mapping').get_parameter_value().string_value
         color_dist_threshold = self.get_parameter('color_dist_threshold').get_parameter_value().integer_value
         height_threshold = self.get_parameter('height_threshold').get_parameter_value().double_value
+        # ROS-level force_field options (passed into LiveTactileProcessor)
+        force_field_scale = float(self.get_parameter('force_field_scale').get_parameter_value().double_value)
+        force_field_baseline = self.get_parameter('force_field_baseline').get_parameter_value().bool_value
         topic = self.get_parameter('topic').get_parameter_value().string_value
         rate = self.get_parameter('rate').get_parameter_value().double_value
         verbose = self.get_parameter('verbose').get_parameter_value().bool_value
@@ -135,6 +141,8 @@ class TactileStreamerNode(Node):
                 enable_depth=True,
                 enable_force=enable_force,
                 temporal_stride=temporal_stride,
+                force_field_scale=force_field_scale,
+                force_field_baseline=force_field_baseline,
                 outputs=outputs,
                 use_mask=use_mask,
                 refine_mask=refine_mask,

@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import numpy as np
+import cv2
 import pathlib
 from vistac_sdk.vistac_device import Camera
 from vistac_sdk.vistac_reconstruct import DepthEstimator
@@ -33,6 +34,10 @@ class LiveTactileProcessor:
         temporal_stride: int = 5,
         bg_offset: float = 0.5,
         outputs: list[str] | None = None,
+        # Runtime baseline override for force_field (None = use YAML)
+        force_field_baseline: bool | None = None,
+        # Force-field visual scaling (viewer/ROS only; NOT a physical-unit conversion)
+        force_field_scale: float = 1.0,
         # Depth-specific parameters
         use_mask=True,
         refine_mask=True,
@@ -42,6 +47,8 @@ class LiveTactileProcessor:
         color_dist_threshold=15,
         height_threshold=0.2,
     ):
+        # Store user-configurable force_field scale (applied to `force_field` returned by get_latest_output)
+        self.force_field_scale = float(force_field_scale)
         """Initialize LiveTactileProcessor.
         
         Args:
@@ -109,6 +116,13 @@ class LiveTactileProcessor:
         self.camera = Camera(serial=serial, sensors_root=sensors_root, thread=True)
         self.camera.connect()
         
+        # Read optional force config values
+        force_cfg = config.get('force', {}) or {}
+        # force_field_baseline is runtime-only now; ignore YAML. Use runtime arg.
+        force_vector_scale_cfg = force_cfg.get('force_vector_scale', [1.0, 1.0, 1.0])
+
+        # Runtime-only flag: prefer explicit runtime override (defaults to False)
+        force_field_baseline_flag = bool(force_field_baseline)
         # Initialize unified processor
         self.processor = TactileProcessor(
             model_path=model_path if enable_depth else None,
@@ -121,6 +135,8 @@ class LiveTactileProcessor:
             device=model_device,
             ppmm=self.ppmm,
             contact_mode='standard',
+            force_field_baseline=force_field_baseline_flag,
+            force_vector_scale=force_vector_scale_cfg,
         )
         
         # Collect fresh background at runtime (average multiple frames)
@@ -169,7 +185,96 @@ class LiveTactileProcessor:
         
         # Get latest result from processor
         result = self.processor.get_latest_result()
-        
+
+        # Apply SDK-level force_field scaling so callers (viewer, ROS, API) receive the same units
+        if result and 'force_field' in result and result['force_field'] is not None:
+            ff = result['force_field']
+            # Only apply non-unit scales to avoid unnecessary copies
+            if hasattr(self, 'force_field_scale') and float(self.force_field_scale) != 1.0:
+                scale = float(self.force_field_scale)
+
+                # Defensive: ensure arrays are numeric and finite
+                try:
+                    normal_arr = np.asarray(ff['normal']).astype(np.float32)
+                    shear_arr = np.asarray(ff['shear']).astype(np.float32)
+                except Exception:
+                    # If data is malformed, skip scaling to avoid crashes
+                    import warnings
+                    warnings.warn("Skipping force_field_scale: force_field arrays are not numeric")
+                    normal_arr = None
+                    shear_arr = None
+
+                if normal_arr is not None and shear_arr is not None:
+                    # Heuristic: only apply scaling if the field looks 'normalized' (model units ~[-1, 1]).
+                    max_normal = float(np.nanmax(np.abs(normal_arr))) if normal_arr.size else 0.0
+                    max_shear = float(np.nanmax(np.abs(shear_arr))) if shear_arr.size else 0.0
+
+                    if max_normal <= 2.0 and max_shear <= 2.0:
+                        # Use float64 during the multiply to reduce risk of overflow, then cast back
+                        normal_scaled = (normal_arr.astype(np.float64) * scale).astype(np.float32)
+                        shear_scaled = (shear_arr.astype(np.float64) * scale).astype(np.float32)
+
+                        # Replace values in the result dict
+                        ff['normal'] = normal_scaled
+                        ff['shear'] = shear_scaled
+                        result['force_field'] = ff
+
+                        # If pointcloud colors/forces were computed earlier from the normalized
+                        # force_field (TactileProcessor), recompute them so colors match the
+                        # scaled `force_field` returned to the viewer/ROS.
+                        try:
+                            pc = result.get('pointcloud')
+                            if pc is not None and 'pointcloud_colors' in result:
+                                # Map fields -> RGB as in TactileProcessor
+                                normal_n = np.clip((normal_scaled + 1.0) / 2.0, 0.0, 1.0)
+                                sx_n = np.clip((shear_scaled[..., 0] + 1.0) / 2.0, 0.0, 1.0)
+                                sy_n = np.clip((shear_scaled[..., 1] + 1.0) / 2.0, 0.0, 1.0)
+                                force_rgb = np.stack([sx_n * 255.0, sy_n * 255.0, normal_n * 255.0], axis=-1).astype(np.uint8)
+
+                                th, tw = frame.shape[0], frame.shape[1]
+                                fh, fw = force_rgb.shape[:2]
+                                if (fh, fw) != (th, tw):
+                                    force_rgb = cv2.resize(force_rgb, (tw, th), interpolation=cv2.INTER_NEAREST)
+                                colors_flat = force_rgb.reshape(-1, 3) / 255.0
+
+                                mask = result.get('mask')
+                                if mask is not None and pc.shape[0] != (th * tw):
+                                    mask_flat = mask.ravel()
+                                    if mask_flat.shape[0] == th * tw:
+                                        colors_flat = colors_flat[mask_flat]
+
+                                result['pointcloud_colors'] = colors_flat
+
+                            if pc is not None and 'pointcloud_forces' in result:
+                                # Recompute per-point raw forces fx,fy,fz from scaled fields
+                                fx_img = shear_scaled[..., 0]
+                                fy_img = shear_scaled[..., 1]
+                                fz_img = normal_scaled
+                                if (fx_img.shape[0], fx_img.shape[1]) != (th, tw):
+                                    fx_img = cv2.resize(fx_img, (tw, th), interpolation=cv2.INTER_NEAREST)
+                                    fy_img = cv2.resize(fy_img, (tw, th), interpolation=cv2.INTER_NEAREST)
+                                    fz_img = cv2.resize(fz_img, (tw, th), interpolation=cv2.INTER_NEAREST)
+                                fx_flat = fx_img.reshape(-1)
+                                fy_flat = fy_img.reshape(-1)
+                                fz_flat = fz_img.reshape(-1)
+                                if mask is not None and pc.shape[0] != (th * tw):
+                                    fx_flat = fx_flat[mask_flat]
+                                    fy_flat = fy_flat[mask_flat]
+                                    fz_flat = fz_flat[mask_flat]
+                                result['pointcloud_forces'] = np.stack([fx_flat, fy_flat, fz_flat], axis=1)
+                        except Exception:
+                            # Recompute is best-effort; if it fails, leave original values.
+                            import warnings
+                            warnings.warn('Failed to recompute pointcloud colors/forces after scaling')
+
+                    else:
+                        # Values already large — assume they're already in physical units; skip scaling.
+                        import warnings
+                        warnings.warn(
+                            f"Skipping force_field_scale (looks already scaled): max_normal={max_normal:.3g}, max_shear={max_shear:.3g}"
+                        )
+
+
         return frame, result
 
     def release(self):

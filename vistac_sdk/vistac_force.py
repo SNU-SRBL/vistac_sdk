@@ -406,7 +406,9 @@ class ForceEstimator:
                  decoder_path: str,
                  temporal_stride: int = 5,
                  bg_offset: float = 0.5,
-                 device: str = 'cuda'):
+                 device: str = 'cuda',
+                 force_field_baseline: bool = False,
+                 force_vector_scale: Optional[Union[list, tuple]] = None):
         """Initialize force estimator.
         
         Args:
@@ -415,6 +417,10 @@ class ForceEstimator:
             temporal_stride: Frames between temporal pair (default: 5)
             bg_offset: Background subtraction offset (default: 0.5)
             device: 'cuda' or 'cpu'
+            force_field_baseline: If True, compute/save a per-pixel background
+                template during `load_background()` and subtract it from
+                subsequent `force_field` outputs at runtime. Default: False.
+            force_vector_scale: Per-axis scale to convert normalized `force_vector` -> physical units (N).
         """
         # Validate paths
         if not os.path.exists(encoder_path):
@@ -469,11 +475,20 @@ class ForceEstimator:
             transforms.Resize((224, 224), antialias=True),
             transforms.ToTensor(),  # Converts to [0, 1]
         ])
-        
+
+        # Per-axis force scale (normalized model units -> physical units (N)).
+        # Per-axis scale mapping normalized model units -> physical units (N)
+        self.force_vector_scale = np.array(force_vector_scale if force_vector_scale is not None else [1.0, 1.0, 1.0], dtype=float)
+
         # Temporal buffer
         self.temporal_stride = temporal_stride
         self.temporal_buffer = TemporalBuffer(max_size=temporal_stride + 1)
-        
+
+        # Runtime force_field baseline subtraction (per-pixel template)
+        # Disabled by default to preserve Sparsh demo behavior.
+        self.force_field_baseline_enabled = bool(force_field_baseline)
+        self.force_field_baseline_template = None
+
         print(f"Force estimator initialized on {self.device}")
     
     def load_background(self, background: np.ndarray):
@@ -506,9 +521,20 @@ class ForceEstimator:
             baseline_fy = float(np.mean(shear[:, :, 1]))
 
             self.force_vector_baseline = {'fx': baseline_fx, 'fy': baseline_fy, 'fz': baseline_fz}
+
+            # Optionally save per-pixel force_field baseline template for runtime subtraction
+            if getattr(self, 'force_field_baseline_enabled', False):
+                try:
+                    self.force_field_baseline_template = {
+                        'normal': normal.copy(),
+                        'shear': shear.copy()
+                    }
+                except Exception:
+                    self.force_field_baseline_template = None
         except Exception:
             # If baseline computation fails for any reason, default to zero baseline
             self.force_vector_baseline = {'fx': 0.0, 'fy': 0.0, 'fz': 0.0}
+            self.force_field_baseline_template = None
     
     def _preprocess(self, img_t: np.ndarray, img_t_minus: np.ndarray) -> torch.Tensor:
         """Preprocess temporal pair for force estimation.
@@ -607,6 +633,15 @@ class ForceEstimator:
                 else:
                     raise
         
+        # Optionally subtract per-pixel force_field baseline template
+        if getattr(self, 'force_field_baseline_enabled', False) and self.force_field_baseline_template is not None:
+            try:
+                normal = normal - self.force_field_baseline_template['normal']
+                shear = shear - self.force_field_baseline_template['shear']
+            except Exception:
+                # If subtraction fails, leave original arrays
+                pass
+
         # Aggregate force vector
         H, W = 224, 224
         fz = float(np.mean(normal))
@@ -620,6 +655,17 @@ class ForceEstimator:
             fy = fy - float(baseline.get('fy', 0.0))
             fz = fz - float(baseline.get('fz', 0.0))
 
+        # Compute physical (Newton) values by applying per-axis force_vector_scale
+        try:
+            sx, sy, sz = tuple(self.force_vector_scale.tolist())
+        except Exception:
+            sx, sy, sz = 1.0, 1.0, 1.0
+        force_vector_physical = {
+            'fx': float(fx * sx),
+            'fy': float(fy * sy),
+            'fz': float(fz * sz),
+        }
+
         return {
             'force_field': {
                 'normal': normal,
@@ -629,5 +675,6 @@ class ForceEstimator:
                 'fx': fx,
                 'fy': fy,
                 'fz': fz
-            }
+            },
+            'force_vector_physical': force_vector_physical
         }

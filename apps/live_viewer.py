@@ -63,6 +63,8 @@ def run_live_viewer(
     height_threshold=0.2,
     enable_force=False,
     temporal_stride=5,
+    force_field_baseline: bool = False,
+    force_field_scale: float = 1.0,
     outputs=None
 ):
     # Determine outputs based on mode or explicit outputs parameter
@@ -95,6 +97,8 @@ def run_live_viewer(
         enable_depth=enable_depth_estimator,
         enable_force=enable_force_estimator,
         temporal_stride=temporal_stride,
+        force_field_baseline=force_field_baseline,
+        force_field_scale=force_field_scale,
         outputs=outputs,
         use_mask=use_mask,
         refine_mask=refine_mask,
@@ -151,10 +155,13 @@ def run_live_viewer(
                                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
                         vis_panels.append(warmup_panel)
                     else:
-                        force_vis = visualize_force_field(
-                            output_data['normal'],
-                            output_data['shear']
-                        )
+                        # `LiveTactileProcessor` now applies `force_field_scale`; just clip and visualize
+                        nf = output_data['normal'].astype(np.float32)
+                        sf = output_data['shear'].astype(np.float32)
+                        # Clip to [-1, 1] to avoid visualization overflow
+                        nf = np.clip(nf, -1.0, 1.0)
+                        sf = np.clip(sf, -1.0, 1.0)
+                        force_vis = visualize_force_field(nf, sf)
                         # Resize force visualization to match camera frame for panel display
                         if force_vis.shape[:2] != (frame.shape[0], frame.shape[1]):
                             force_vis = cv2.resize(force_vis, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
@@ -168,11 +175,14 @@ def run_live_viewer(
                                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
                         vis_panels.append(warmup_panel)
                     else:
+                        # Prefer physical values (Newtons) when available
+                        phys = result_dict.get('force_vector_physical')
+                        if phys is not None:
+                            fx, fy, fz = phys['fx'], phys['fy'], phys['fz']
+                        else:
+                            fx, fy, fz = output_data['fx'], output_data['fy'], output_data['fz']
                         force_vis = visualize_force_vector(
-                            output_data['fx'],
-                            output_data['fy'],
-                            output_data['fz'],
-                            frame
+                            fx, fy, fz, frame
                         )
                         vis_panels.append(force_vis)
             
@@ -341,13 +351,17 @@ def run_live_viewer(
                 cv2.imshow(device_type, combined)
             else:
                 # Visualize force field as RGB heatmap (force only, no overlay)
-                force_vis = visualize_force_field(
-                    force_data['normal'],
-                    force_data['shear']
-                )
+                        # Apply runtime RGB scaling (user-configurable) after baseline
+                nf = force_data['normal'].astype(np.float32)
+                sf = force_data['shear'].astype(np.float32)
+                nf = np.clip(nf, -1.0, 1.0)
+                sf = np.clip(sf, -1.0, 1.0)
+                force_vis = visualize_force_field(nf, sf)
                 # Ensure force_vis matches frame resolution before stacking
                 if force_vis.shape[:2] != (frame.shape[0], frame.shape[1]):
                     force_vis = cv2.resize(force_vis, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
+                combined = np.hstack([frame, force_vis]) if frame is not None else force_vis
+                cv2.imshow(device_type, combined)
             
             key = cv2.waitKey(1)
             if key != -1:
@@ -375,15 +389,16 @@ def run_live_viewer(
                 combined = np.hstack([raw_vis, warmup_panel])
                 cv2.imshow(device_type, combined)
             else:
+                # Prefer physical (N) values when available
+                phys = result_dict.get('force_vector_physical')
+                if phys is not None:
+                    fx, fy, fz = phys['fx'], phys['fy'], phys['fz']
+                else:
+                    fx, fy, fz = force_data['fx'], force_data['fy'], force_data['fz']
+
                 # Visualize force vector as arrow/circle overlay on raw image
                 force_vis = visualize_force_vector(
-                    force_data['fx'],
-                    force_data['fy'],
-                    force_data['fz'],
-                    frame,
-                    arrow_scale=50.0,
-                    arrow_color=(0, 255, 0),
-                    arrow_thickness=3
+                    fx, fy, fz, frame, arrow_scale=50.0, arrow_color=(0, 255, 0), arrow_thickness=3
                 )
                 if frame.ndim == 2:
                     raw_vis = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
@@ -461,6 +476,14 @@ if __name__ == "__main__":
         help="Temporal stride for force estimation (frames between temporal pair)"
     )
     parser.add_argument(
+        "--force_field_baseline", action="store_true", default=False,
+        help="If set, enable runtime per-pixel baseline subtraction for force_field outputs"
+    )
+    parser.add_argument(
+        "--force_field_scale", type=float, default=1.0,
+        help="Scalar multiplier applied to force_field values before RGB visualization (default=1.0)"
+    )
+    parser.add_argument(
         "--outputs", type=str, nargs='+', default=None,
         help="Explicit list of outputs to compute (e.g., depth force_field force_vector)"
     )
@@ -479,5 +502,7 @@ if __name__ == "__main__":
         height_threshold=args.height_threshold,
         enable_force=args.enable_force,
         temporal_stride=args.temporal_stride,
+        force_field_baseline=args.force_field_baseline,
+        force_field_scale=args.force_field_scale,
         outputs=args.outputs
     )

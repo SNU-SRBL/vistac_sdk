@@ -174,3 +174,6 @@ sensors/D21119/calibration
 # Downloaded model files (large binaries)
 models/*.ckpt
 models/*.pth
+
+# Reference
+sparsh-main/

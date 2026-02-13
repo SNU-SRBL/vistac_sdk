@@ -62,6 +62,8 @@ def launch_setup(context, *args, **kwargs):
     publish_force_fields = LaunchConfiguration('publish_force_fields').perform(context) == 'true'
     force_mapping = LaunchConfiguration('force_mapping').perform(context)
     height_threshold = float(LaunchConfiguration('height_threshold').perform(context))
+    force_field_scale = float(LaunchConfiguration('force_field_scale').perform(context))
+    force_field_baseline = LaunchConfiguration('force_field_baseline').perform(context) == 'true'
     
     # Auto-discover sensors from sensors_root directory
     sensors = []
@@ -109,7 +111,9 @@ def launch_setup(context, *args, **kwargs):
                 "pointcloud_color": pointcloud_color,
                 "pointcloud_color_format": pointcloud_color_format,
                 "publish_force_fields": publish_force_fields,
-                "force_mapping": force_mapping
+                "force_mapping": force_mapping,
+                "force_field_scale": force_field_scale,
+                "force_field_baseline": force_field_baseline
             }],
         )
         nodes.append(node)
@@ -207,6 +211,17 @@ def generate_launch_description():
             'height_threshold',
             default_value='0.2',
             description='Height threshold in mm for contact detection'
+        ),
+        # New: force_field runtime controls
+        DeclareLaunchArgument(
+            'force_field_scale',
+            default_value='1.0',
+            description='Global scale applied to force_field outputs (SDK-wide)'
+        ),
+        DeclareLaunchArgument(
+            'force_field_baseline',
+            default_value='false',
+            description='Enable runtime per-pixel baseline subtraction for force_field'
         ),
         
         # Use OpaqueFunction to handle dynamic node creation

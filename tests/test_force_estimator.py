@@ -219,6 +219,7 @@ class TestForceEstimator(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertIn('force_field', result)
         self.assertIn('force_vector', result)
+        self.assertIn('force_vector_physical', result)
         
         # Check force field structure
         force_field = result['force_field']
@@ -237,10 +238,19 @@ class TestForceEstimator(unittest.TestCase):
         self.assertIn('fy', force_vector)
         self.assertIn('fz', force_vector)
         
+        # Check physical vector structure
+        phys = result['force_vector_physical']
+        self.assertIn('fx', phys)
+        self.assertIn('fy', phys)
+        self.assertIn('fz', phys)
+        
         # Check types (should be Python floats)
         self.assertIsInstance(force_vector['fx'], float)
         self.assertIsInstance(force_vector['fy'], float)
         self.assertIsInstance(force_vector['fz'], float)
+        self.assertIsInstance(phys['fx'], float)
+        self.assertIsInstance(phys['fy'], float)
+        self.assertIsInstance(phys['fz'], float)
     
     @unittest.skipUnless(os.path.exists('models/sparsh_dino_base_encoder.ckpt'),
                          "Model files not available")
@@ -299,6 +309,62 @@ class TestForceEstimator(unittest.TestCase):
         self.assertAlmostEqual(r_no['force_vector']['fx'] - b['fx'], r_yes['force_vector']['fx'], places=5)
         self.assertAlmostEqual(r_no['force_vector']['fy'] - b['fy'], r_yes['force_vector']['fy'], places=5)
         self.assertAlmostEqual(r_no['force_vector']['fz'] - b['fz'], r_yes['force_vector']['fz'], places=5)
+
+    @unittest.skipUnless(os.path.exists('models/sparsh_dino_base_encoder.ckpt'),
+                         "Model files not available")
+    def test_force_vector_scale_property(self):
+        """Verify constructor `force_vector_scale` is stored correctly."""
+        est = ForceEstimator(
+            encoder_path=self.encoder_path,
+            decoder_path=self.decoder_path,
+            device='cpu',
+            temporal_stride=5,
+            force_vector_scale=[2.0, 3.0, 4.0]
+        )
+        # Preferred attribute
+        self.assertTrue(hasattr(est, 'force_vector_scale'))
+        import numpy as _np
+        self.assertTrue(_np.allclose(est.force_vector_scale, _np.array([2.0, 3.0, 4.0])))
+
+    @unittest.skipUnless(os.path.exists('models/sparsh_dino_base_encoder.ckpt'),
+                         "Model files not available")
+    def test_force_field_baseline_subtraction(self):
+        """Ensure optional runtime baseline subtraction is recorded and applied for force_field."""
+        estimator = ForceEstimator(
+            encoder_path=self.encoder_path,
+            decoder_path=self.decoder_path,
+            device='cpu',
+            temporal_stride=5,
+            force_field_baseline=True,
+        )
+        estimator.load_background(self.background)
+
+        # Baseline template must be stored when enabled
+        self.assertIsNotNone(estimator.force_field_baseline_template)
+        self.assertIn('normal', estimator.force_field_baseline_template)
+        self.assertIn('shear', estimator.force_field_baseline_template)
+        self.assertEqual(estimator.force_field_baseline_template['normal'].shape, (224, 224))
+        self.assertEqual(estimator.force_field_baseline_template['shear'].shape, (224, 224, 2))
+
+        # Compute result without template subtraction by zeroing the template
+        estimator.temporal_buffer.clear()
+        estimator.force_field_baseline_template = {'normal': np.zeros((224, 224)), 'shear': np.zeros((224, 224, 2))}
+        for i in range(6):
+            r_no = estimator.estimate(self.image, timestamp=float(i))
+        self.assertIsNotNone(r_no)
+
+        # Reset buffer, restore computed template and compute again
+        estimator.temporal_buffer.clear()
+        estimator.load_background(self.background)  # recompute template
+        for i in range(6):
+            r_yes = estimator.estimate(self.image, timestamp=float(i))
+        self.assertIsNotNone(r_yes)
+
+        # The per-pixel subtraction should hold approximately:
+        np.testing.assert_allclose(r_no['force_field']['normal'] - estimator.force_field_baseline_template['normal'],
+                                   r_yes['force_field']['normal'], atol=1e-5)
+        np.testing.assert_allclose(r_no['force_field']['shear'] - estimator.force_field_baseline_template['shear'],
+                                   r_yes['force_field']['shear'], atol=1e-5)
     
     def test_preprocessing_without_background_raises_error(self):
         """Test that preprocessing without background raises error."""
