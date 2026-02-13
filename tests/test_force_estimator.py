@@ -2,8 +2,10 @@
 
 import os
 import sys
+import importlib.util
 import unittest
 import tempfile
+from unittest import mock
 
 import numpy as np
 import torch
@@ -17,6 +19,100 @@ from vistac_sdk.vistac_force import (
     ForceEstimator,
     _load_encoder_checkpoint
 )
+
+
+def _load_symbol_from_file(module_key: str, file_path: str, symbol_name: str):
+    spec = importlib.util.spec_from_file_location(module_key, file_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Failed to load module spec from {file_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return getattr(module, symbol_name)
+
+
+class _SparshReferenceDecoder(torch.nn.Module):
+    """Independent Sparsh reference decoder built from source layer files."""
+
+    def __init__(self):
+        super().__init__()
+        sparsh_root = os.path.join(os.path.dirname(__file__), '..', 'sparsh-main')
+        sys.path.insert(0, sparsh_root)
+
+        from tactile_ssl.model.vision_transformer import VIT_EMBED_DIMS
+
+        reassemble_cls = _load_symbol_from_file(
+            'test_sparsh_reassemble_mod',
+            os.path.join(
+                sparsh_root,
+                'tactile_ssl',
+                'downstream_task',
+                'utils_forcefield',
+                'layers',
+                'Reassemble.py'
+            ),
+            'Reassemble'
+        )
+        fusion_cls = _load_symbol_from_file(
+            'test_sparsh_fusion_mod',
+            os.path.join(
+                sparsh_root,
+                'tactile_ssl',
+                'downstream_task',
+                'utils_forcefield',
+                'layers',
+                'Fusion.py'
+            ),
+            'Fusion'
+        )
+        head_cls = _load_symbol_from_file(
+            'test_sparsh_head_mod',
+            os.path.join(
+                sparsh_root,
+                'tactile_ssl',
+                'downstream_task',
+                'utils_forcefield',
+                'layers',
+                'Head.py'
+            ),
+            'NormalShearHead'
+        )
+
+        embed_dim = VIT_EMBED_DIMS['vit_base']
+        image_size = (3, 224, 224)
+        patch_size = 16
+        hooks = [2, 5, 8, 11]
+        reassemble_s = [4, 8, 16, 32]
+        resample_dim = 128
+
+        self.norm = torch.nn.LayerNorm(embed_dim)
+        self.hooks = hooks
+        self.n_patches = (image_size[1] // patch_size) ** 2
+        self.reassembles = torch.nn.ModuleList([
+            reassemble_cls(image_size, 'ignore', patch_size, s, embed_dim, resample_dim)
+            for s in reassemble_s
+        ])
+        self.fusions = torch.nn.ModuleList([fusion_cls(resample_dim) for _ in reassemble_s])
+        self.probe = head_cls(features=resample_dim)
+
+    def forward(self, encoder_activations: dict) -> dict:
+        sample_key = list(encoder_activations.keys())[0]
+        start_idx = encoder_activations[sample_key].shape[1] - self.n_patches
+        for key in encoder_activations.keys():
+            encoder_activations[key] = self.norm(encoder_activations[key][:, start_idx:, :])
+
+        previous_stage = None
+        for i in np.arange(len(self.fusions) - 1, -1, -1, dtype=int):
+            hook_to_take = 't' + str(self.hooks[int(i)])
+            activation_result = encoder_activations[hook_to_take]
+            reassemble_result = self.reassembles[i](activation_result)
+            fusion_result = self.fusions[i](reassemble_result, previous_stage)
+            previous_stage = fusion_result
+
+        y = self.probe(previous_stage, mode='normal_shear')
+        return {
+            'normal': y[:, 0, :, :].unsqueeze(1),
+            'shear': y[:, 1:, :, :],
+        }
 
 
 class TestSparshEncoder(unittest.TestCase):
@@ -377,6 +473,120 @@ class TestForceEstimator(unittest.TestCase):
                                    r_yes['force_field']['normal'], atol=1e-5)
         np.testing.assert_allclose(r_no['force_field']['shear'] - estimator.force_field_baseline_template['shear'],
                                    r_yes['force_field']['shear'], atol=1e-5)
+
+    @unittest.skipUnless(os.path.exists('models/sparsh_dino_base_encoder.ckpt'),
+                         "Model files not available")
+    def test_strict_encoder_load_reports_key_mismatch(self):
+        """Strict encoder loading should fail and report key diagnostics on mismatch."""
+        with mock.patch('vistac_sdk.vistac_force._load_encoder_checkpoint', return_value={'bad.key': torch.tensor(0.0)}):
+            with self.assertRaises(RuntimeError) as ctx:
+                ForceEstimator(
+                    encoder_path=self.encoder_path,
+                    decoder_path=self.decoder_path,
+                    device='cpu'
+                )
+
+        msg = str(ctx.exception)
+        self.assertIn('Strict Sparsh encoder load failed', msg)
+        self.assertIn('missing_keys=', msg)
+        self.assertIn('unexpected_keys=', msg)
+
+    @unittest.skipUnless(os.path.exists('models/sparsh_dino_base_encoder.ckpt'),
+                         "Model files not available")
+    def test_strict_decoder_load_reports_key_mismatch(self):
+        """Strict decoder loading should fail and report key diagnostics on mismatch."""
+        good_encoder_state = _load_encoder_checkpoint(self.encoder_path)
+        with mock.patch('vistac_sdk.vistac_force._load_encoder_checkpoint', return_value=good_encoder_state):
+            with mock.patch('vistac_sdk.vistac_force.torch.load', return_value={'bad.key': torch.tensor(0.0)}):
+                with self.assertRaises(RuntimeError) as ctx:
+                    ForceEstimator(
+                        encoder_path=self.encoder_path,
+                        decoder_path=self.decoder_path,
+                        device='cpu'
+                    )
+
+        msg = str(ctx.exception)
+        self.assertIn('Strict Sparsh decoder load failed', msg)
+        self.assertIn('missing_keys=', msg)
+        self.assertIn('unexpected_keys=', msg)
+
+    @unittest.skipUnless(
+        os.path.exists('models/sparsh_dino_base_encoder.ckpt') and os.path.exists('models/sparsh_digit_forcefield_decoder.pth'),
+        "Model files not available"
+    )
+    def test_parity_against_sparsh_reference(self):
+        """Compare SDK outputs to an independent Sparsh reference path on the same frame pair."""
+        np.random.seed(123)
+        torch.manual_seed(123)
+
+        estimator = ForceEstimator(
+            encoder_path=self.encoder_path,
+            decoder_path=self.decoder_path,
+            device='cpu',
+        )
+
+        bg = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
+        img_t = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
+        img_t_minus = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
+        estimator.load_background(bg)
+        input_tensor = estimator._preprocess(img_t, img_t_minus)
+
+        with torch.no_grad():
+            _ = estimator.encoder(input_tensor)
+            sdk_feats = estimator.encoder.get_intermediate_features()
+            sdk_normal, sdk_shear = estimator.decoder(sdk_feats)
+
+        sparsh_root = os.path.join(os.path.dirname(__file__), '..', 'sparsh-main')
+        sys.path.insert(0, sparsh_root)
+        from tactile_ssl.model.vision_transformer import vit_base
+
+        ref_encoder = vit_base(
+            img_size=(224, 224),
+            patch_size=16,
+            in_chans=6,
+            num_register_tokens=1,
+            pos_embed_fn='sinusoidal',
+        )
+        ref_encoder.load_state_dict(_load_encoder_checkpoint(self.encoder_path), strict=True)
+        ref_encoder.eval()
+
+        decoder_weights = torch.load(self.decoder_path, map_location='cpu', weights_only=True)
+        cleaned_decoder = {
+            (k[len('model_task.'): ] if k.startswith('model_task.') else k): v
+            for k, v in decoder_weights.items()
+        }
+
+        ref_decoder = _SparshReferenceDecoder()
+        ref_decoder.load_state_dict(cleaned_decoder, strict=True)
+        ref_decoder.eval()
+
+        with torch.no_grad():
+            x = ref_encoder.prepare_tokens_with_masks(input_tensor)
+            ref_acts = {}
+            for i, blk in enumerate(ref_encoder.blocks):
+                x = blk(x)
+                if i in [2, 5, 8, 11]:
+                    ref_acts[f't{i}'] = x
+            ref_out = ref_decoder(ref_acts)
+
+        ref_normal = ref_out['normal'].cpu().numpy()
+        ref_shear = ref_out['shear'].cpu().numpy()
+        sdk_normal_np = sdk_normal.cpu().numpy()
+        sdk_shear_np = sdk_shear.cpu().numpy()
+
+        np.testing.assert_allclose(sdk_normal_np, ref_normal, rtol=1e-6, atol=1e-6)
+        np.testing.assert_allclose(sdk_shear_np, ref_shear, rtol=1e-6, atol=1e-6)
+
+        sdk_fx = float(np.mean(sdk_shear_np[:, 0, :, :]))
+        sdk_fy = float(np.mean(sdk_shear_np[:, 1, :, :]))
+        sdk_fz = float(np.mean(sdk_normal_np[:, 0, :, :]))
+        ref_fx = float(np.mean(ref_shear[:, 0, :, :]))
+        ref_fy = float(np.mean(ref_shear[:, 1, :, :]))
+        ref_fz = float(np.mean(ref_normal[:, 0, :, :]))
+
+        self.assertAlmostEqual(sdk_fx, ref_fx, places=6)
+        self.assertAlmostEqual(sdk_fy, ref_fy, places=6)
+        self.assertAlmostEqual(sdk_fz, ref_fz, places=6)
     
     def test_preprocessing_without_background_raises_error(self):
         """Test that preprocessing without background raises error."""

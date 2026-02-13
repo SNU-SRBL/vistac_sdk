@@ -8,6 +8,7 @@ from vistac_sdk.vistac_device import Camera
 from vistac_sdk.vistac_reconstruct import DepthEstimator
 from vistac_sdk.tactile_processor import TactileProcessor
 from vistac_sdk.utils import load_config
+from vistac_sdk.viz_utils import force_field_to_rgb
 
 # Background collection constants
 BG_COLLECTION_FRAMES = 10  # Number of frames to average for background
@@ -228,12 +229,7 @@ class LiveTactileProcessor:
                 try:
                     pc = result.get('pointcloud')
                     if pc is not None and 'pointcloud_colors' in result:
-                        # Map fields -> RGB as in TactileProcessor
-                        # normal is in [0,1] (Sparsh sigmoid); shear is visualized from [-1,1]
-                        normal_n = np.clip(normal_scaled, 0.0, 1.0)
-                        sx_n = np.clip((shear_scaled[..., 0] + 1.0) / 2.0, 0.0, 1.0)
-                        sy_n = np.clip((shear_scaled[..., 1] + 1.0) / 2.0, 0.0, 1.0)
-                        force_rgb = np.stack([sx_n * 255.0, sy_n * 255.0, normal_n * 255.0], axis=-1).astype(np.uint8)
+                        force_rgb = force_field_to_rgb(normal_scaled, shear_scaled)
 
                         th, tw = frame.shape[0], frame.shape[1]
                         fh, fw = force_rgb.shape[:2]

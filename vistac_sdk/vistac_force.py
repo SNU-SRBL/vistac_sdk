@@ -6,17 +6,16 @@ Sparsh models (ViT encoder + DPT decoder) with temporal frame pairs.
 """
 
 import os
+import pathlib
+import importlib.util
 import warnings
-from typing import Dict, Optional, Tuple, Union, Literal
-import sys
-import types
+from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import cv2
 from PIL import Image
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torchvision import transforms
 
 from .temporal_buffer import TemporalBuffer
@@ -31,30 +30,6 @@ def _load_encoder_checkpoint(checkpoint_path: str) -> Dict[str, torch.Tensor]:
     Returns:
         OrderedDict of model weights with 'student_encoder.backbone.' prefix removed
     """
-    # Create fake modules to bypass Lightning class dependencies
-    modules_to_fake = [
-        'tactile_ssl',
-        'tactile_ssl.model',
-        'tactile_ssl.model.custom_scheduler',
-        'tactile_ssl.model.vision_backbone',
-        'tactile_ssl.model.vision_transformer',
-    ]
-    
-    for mod_name in modules_to_fake:
-        if mod_name not in sys.modules:
-            fake_mod = types.ModuleType(mod_name)
-            sys.modules[mod_name] = fake_mod
-    
-    # Add dummy classes
-    class DummyClass:
-        def __init__(self, *args, **kwargs):
-            pass
-    
-    for cls_name in ['WarmupCosineScheduler', 'CosineWDSchedule', 'VisionTransformer', 'DinoVisionTransformer']:
-        for mod_name in modules_to_fake[1:]:  # Skip base module
-            if mod_name in sys.modules:
-                setattr(sys.modules[mod_name], cls_name, type(cls_name, (DummyClass,), {}))
-    
     # Load checkpoint
     checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     state_dict = checkpoint['model']
@@ -70,112 +45,35 @@ def _load_encoder_checkpoint(checkpoint_path: str) -> Dict[str, torch.Tensor]:
     return cleaned_state_dict
 
 
-class RoPE2D(nn.Module):
-    """2D Rotary Position Embedding."""
-    
-    def __init__(self, embed_dim: int):
-        super().__init__()
-        self.embed_dim = embed_dim
-        # Frequency bands will be loaded from checkpoint
-        # Note: 192 bands for 768 embed_dim (not 384)
-        self.register_buffer('frequency_bands', torch.randn(2, 192))
-    
-    def forward(self, x: torch.Tensor, h: int, w: int) -> torch.Tensor:
-        """Apply RoPE to patch embeddings.
-        
-        Args:
-            x: [B, N, C] patch embeddings
-            h: Height in patches
-            w: Width in patches
-            
-        Returns:
-            [B, N, C] embeddings with positional encoding
-        """
-        # For simplicity, return x as-is since position info is already in features
-        return x
+def _ensure_sparsh_path() -> str:
+    """Ensure Sparsh source root is available on sys.path."""
+    import sys
+
+    sdk_root = pathlib.Path(__file__).resolve().parents[1]
+    sparsh_root = str(sdk_root / 'sparsh-main')
+    if sparsh_root not in sys.path:
+        sys.path.insert(0, sparsh_root)
+    return sparsh_root
 
 
-class Attention(nn.Module):
-    """Multi-head self-attention."""
-    
-    def __init__(self, dim: int, num_heads: int = 12):
-        super().__init__()
-        self.num_heads = num_heads
-        self.head_dim = dim // num_heads
-        self.scale = self.head_dim ** -0.5
-        
-        self.qkv = nn.Linear(dim, dim * 3)
-        self.proj = nn.Linear(dim, dim)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, N, C = x.shape
-        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]
-        
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-        attn = attn.softmax(dim=-1)
-        
-        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
-        x = self.proj(x)
-        return x
+_SPARSH_MODULE_CACHE: Dict[str, object] = {}
 
 
-class MLP(nn.Module):
-    """MLP block with GELU activation."""
-    
-    def __init__(self, in_features: int, hidden_features: int):
-        super().__init__()
-        self.fc1 = nn.Linear(in_features, hidden_features)
-        self.act = nn.GELU()
-        self.fc2 = nn.Linear(hidden_features, in_features)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.fc1(x)
-        x = self.act(x)
-        x = self.fc2(x)
-        return x
-
-
-class LayerScale(nn.Module):
-    """Layer scale for better training stability."""
-    
-    def __init__(self, dim: int, init_value: float = 1e-5):
-        super().__init__()
-        self.gamma = nn.Parameter(torch.ones(dim) * init_value)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x * self.gamma
-
-
-class Block(nn.Module):
-    """Transformer block with attention and MLP."""
-    
-    def __init__(self, dim: int, num_heads: int, mlp_ratio: float = 4.0):
-        super().__init__()
-        self.norm1 = nn.LayerNorm(dim)
-        self.attn = Attention(dim, num_heads)
-        self.ls1 = LayerScale(dim)
-        
-        self.norm2 = nn.LayerNorm(dim)
-        self.mlp = MLP(dim, int(dim * mlp_ratio))
-        self.ls2 = LayerScale(dim)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.ls1(self.attn(self.norm1(x)))
-        x = x + self.ls2(self.mlp(self.norm2(x)))
-        return x
+def _load_symbol_from_file(module_key: str, file_path: str, symbol_name: str):
+    """Load a symbol from a Python file without importing parent packages."""
+    if module_key not in _SPARSH_MODULE_CACHE:
+        spec = importlib.util.spec_from_file_location(module_key, file_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Failed to create import spec for {file_path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _SPARSH_MODULE_CACHE[module_key] = module
+    module = _SPARSH_MODULE_CACHE[module_key]
+    return getattr(module, symbol_name)
 
 
 class SparshEncoder(nn.Module):
-    """Vision Transformer encoder for Sparsh.
-    
-    ViT-base configuration:
-    - patch_size: 16
-    - embed_dim: 768
-    - depth: 12 transformer blocks
-    - num_heads: 12
-    - mlp_ratio: 4.0
-    """
+    """Sparsh-native ViT-base encoder wrapper for force estimation."""
     
     def __init__(self, 
                  img_size: int = 224,
@@ -186,28 +84,37 @@ class SparshEncoder(nn.Module):
                  num_heads: int = 12,
                  mlp_ratio: float = 4.0):
         super().__init__()
-        
+
+        _ensure_sparsh_path()
+        from tactile_ssl.model.vision_transformer import vit_base
+
+        if any(v != default for v, default in [
+            (embed_dim, 768),
+            (depth, 12),
+            (num_heads, 12),
+            (mlp_ratio, 4.0),
+        ]):
+            warnings.warn(
+                "SparshEncoder wrapper uses Sparsh vit_base canonical settings; "
+                "non-canonical constructor arguments are ignored."
+            )
+
+        self.model = vit_base(
+            img_size=(img_size, img_size),
+            patch_size=patch_size,
+            in_chans=in_chans,
+            num_register_tokens=1,
+            pos_embed_fn='sinusoidal',
+        )
+
         self.patch_size = patch_size
-        self.num_patches = (img_size // patch_size) ** 2
-        
-        # Patch embedding
-        self.patch_embed = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
-        
-        # Position embedding (RoPE)
-        self.pos_embed = RoPE2D(embed_dim)
-        
-        # Register token (like class token)
-        self.register_tokens = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        
-        # Transformer blocks
-        self.blocks = nn.ModuleList([
-            Block(embed_dim, num_heads, mlp_ratio)
-            for _ in range(depth)
-        ])
-        
-        # Intermediate feature extraction layers
-        self.feature_layers = [2, 5, 8, 11]  # Extract features from these layers
-        self.intermediate_features = []
+        self.img_size = img_size
+        self.num_patches = self.model.patch_embed.num_patches
+        self.register_tokens = self.model.register_tokens
+        self.blocks = self.model.blocks
+
+        self.feature_layers = [2, 5, 8, 11]
+        self.intermediate_features: list[torch.Tensor] = []
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass with intermediate feature extraction.
@@ -218,189 +125,136 @@ class SparshEncoder(nn.Module):
         Returns:
             [B, N, C] final features
         """
-        B = x.shape[0]
-        
-        # Patch embedding
-        x = self.patch_embed(x)  # [B, 768, 14, 14]
-        h, w = x.shape[2], x.shape[3]
-        x = x.flatten(2).transpose(1, 2)  # [B, 196, 768]
-        
-        # Add position encoding
-        x = self.pos_embed(x, h, w)
-        
-        # Add register token
-        register_tokens = self.register_tokens.expand(B, -1, -1)
-        x = torch.cat([register_tokens, x], dim=1)  # [B, 197, 768]
-        
-        # Pass through transformer blocks
+        x = self.model.prepare_tokens_with_masks(x)
+
         self.intermediate_features = []
-        for i, blk in enumerate(self.blocks):
+        for i, blk in enumerate(self.model.blocks):
             x = blk(x)
             if i in self.feature_layers:
                 self.intermediate_features.append(x)
-        
+
         return x
     
     def get_intermediate_features(self) -> list:
         """Get intermediate features from specified layers."""
         return self.intermediate_features
 
-
-class Resample(nn.Module):
-    """Resample features to target spatial resolution."""
-    
-    def __init__(self, in_dim: int, out_dim: int, scale_factor: int):
-        super().__init__()
-        self.conv1 = nn.Conv2d(in_dim, out_dim, kernel_size=1)
-        if scale_factor > 1:
-            self.conv2 = nn.ConvTranspose2d(out_dim, out_dim, 
-                                           kernel_size=scale_factor, 
-                                           stride=scale_factor)
-        else:
-            self.conv2 = nn.Identity()
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.conv1(x)
-        x = self.conv2(x)
-        return x
-
-
-class Reassemble(nn.Module):
-    """Reassemble features at different scales."""
-    
-    def __init__(self, embed_dim: int, out_dim: int, scale_factor: int):
-        super().__init__()
-        self.resample = Resample(embed_dim, out_dim, scale_factor)
-    
-    def forward(self, x: torch.Tensor, h: int, w: int) -> torch.Tensor:
-        """Reassemble patch features to spatial features.
-        
-        Args:
-            x: [B, N+1, C] features (with register token)
-            h: Height in patches
-            w: Width in patches
-            
-        Returns:
-            [B, out_dim, H, W] spatial features
-        """
-        # Remove register token
-        x = x[:, 1:, :]  # [B, N, C]
-        
-        B, N, C = x.shape
-        x = x.transpose(1, 2).reshape(B, C, h, w)  # [B, C, h, w]
-        x = self.resample(x)
-        return x
-
-
-class FusionBlock(nn.Module):
-    """Fuse features from different scales."""
-    
-    def __init__(self, dim: int):
-        super().__init__()
-        self.conv1 = nn.Conv2d(dim, dim, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(dim, dim, kernel_size=3, padding=1)
-    
-    def forward(self, *features: torch.Tensor) -> torch.Tensor:
-        """Fuse multiple feature maps.
-        
-        Args:
-            features: Variable number of [B, C, H, W] tensors
-            
-        Returns:
-            [B, C, H, W] fused features
-        """
-        # Resize all to same size (largest)
-        target_size = max(f.shape[-2:] for f in features)
-        resized = []
-        for f in features:
-            if f.shape[-2:] != target_size:
-                f = F.interpolate(f, size=target_size, mode='bilinear', align_corners=False)
-            resized.append(f)
-        
-        # Sum features
-        x = sum(resized)
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        return x
+    def patch_embed(self, x: torch.Tensor) -> torch.Tensor:
+        """Compatibility wrapper returning [B, C, H, W] patch features."""
+        tokens = self.model.patch_embed(x)
+        if tokens.ndim == 3:
+            batch_size, num_tokens, channels = tokens.shape
+            grid_h = self.img_size // self.patch_size
+            grid_w = self.img_size // self.patch_size
+            if num_tokens != grid_h * grid_w:
+                raise ValueError(
+                    f"Unexpected patch token count {num_tokens}; expected {grid_h * grid_w}"
+                )
+            return tokens.transpose(1, 2).reshape(batch_size, channels, grid_h, grid_w)
+        return tokens
 
 
 class ForceFieldDecoder(nn.Module):
-    """DPT-style decoder for force field prediction.
+    """Sparsh-equivalent force-field decoder for inference."""
     
-    Outputs:
-    - normal: [B, 1, 224, 224] normal force field
-    - shear: [B, 2, 224, 224] shear force field (Fx, Fy)
-    """
-    
-    def __init__(self, embed_dim: int = 768, out_dim: int = 128):
+    def __init__(
+        self,
+        image_size: Tuple[int, int, int] = (3, 224, 224),
+        embed_dim: int = 768,
+        patch_size: int = 16,
+        out_dim: int = 128,
+        hooks: list[int] = [2, 5, 8, 11],
+        reassemble_s: list[int] = [4, 8, 16, 32],
+    ):
         super().__init__()
-        
-        # Reassemble features at different scales
-        # Actual scale factors from checkpoint: [4, 2, 1, 2]
-        self.reassembles = nn.ModuleList([
-            Reassemble(embed_dim, out_dim, scale_factor=4),   # 14x14 -> 56x56
-            Reassemble(embed_dim, out_dim, scale_factor=2),   # 14x14 -> 28x28
-            Reassemble(embed_dim, out_dim, scale_factor=1),   # 14x14 -> 14x14
-            Reassemble(embed_dim, out_dim, scale_factor=2),   # 14x14 -> 28x28
-        ])
-        
-        # Fusion blocks
-        self.fusion = FusionBlock(out_dim)
-        
-        # Output heads
-        self.norm = nn.LayerNorm(embed_dim)
-        self.head_normal = nn.Sequential(
-            nn.Conv2d(out_dim, out_dim // 2, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(out_dim // 2, 1, kernel_size=1)
+
+        sparsh_root = _ensure_sparsh_path()
+        reassemble_cls = _load_symbol_from_file(
+            'sparsh_reassemble_mod',
+            os.path.join(
+                sparsh_root,
+                'tactile_ssl',
+                'downstream_task',
+                'utils_forcefield',
+                'layers',
+                'Reassemble.py'
+            ),
+            'Reassemble',
         )
-        self.head_shear = nn.Sequential(
-            nn.Conv2d(out_dim, out_dim // 2, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(out_dim // 2, 2, kernel_size=1)
+        fusion_cls = _load_symbol_from_file(
+            'sparsh_fusion_mod',
+            os.path.join(
+                sparsh_root,
+                'tactile_ssl',
+                'downstream_task',
+                'utils_forcefield',
+                'layers',
+                'Fusion.py'
+            ),
+            'Fusion',
+        )
+        head_cls = _load_symbol_from_file(
+            'sparsh_head_mod',
+            os.path.join(
+                sparsh_root,
+                'tactile_ssl',
+                'downstream_task',
+                'utils_forcefield',
+                'layers',
+                'Head.py'
+            ),
+            'NormalShearHead',
         )
 
-        # Match Sparsh head scaling for shear (tanh * scale_flow)
-        self.scale_flow = 20.0
-    
-    def forward(self, intermediate_features: list) -> Tuple[torch.Tensor, torch.Tensor]:
+        self.norm = nn.LayerNorm(embed_dim)
+        self.hooks = hooks
+        self.n_patches = (image_size[1] // patch_size) ** 2
+        self.reassembles = nn.ModuleList([
+            reassemble_cls(image_size, 'ignore', patch_size, s, embed_dim, out_dim)
+            for s in reassemble_s
+        ])
+        self.fusions = nn.ModuleList([fusion_cls(out_dim) for _ in reassemble_s])
+        self.probe = head_cls(features=out_dim)
+
+    def forward(self, intermediate_features: Union[list, Dict[str, torch.Tensor]]) -> Tuple[torch.Tensor, torch.Tensor]:
         """Decode intermediate features to force fields.
         
         Args:
-            intermediate_features: List of [B, N+1, C] features from layers [2, 5, 8, 11]
+            intermediate_features: Dict keyed by {'t2','t5','t8','t11'} or
+                list ordered as [2, 5, 8, 11] with [B, N+1, C] tensors.
             
         Returns:
             normal: [B, 1, 224, 224]
             shear: [B, 2, 224, 224]
         """
-        h, w = 14, 14  # Patch grid size for 224x224 with patch_size=16
-        
-        # Normalize features
-        features_norm = [self.norm(f) for f in intermediate_features]
-        
-        # Reassemble to spatial features
-        spatial_features = []
-        for i, (feat, reassemble) in enumerate(zip(features_norm, self.reassembles)):
-            spatial = reassemble(feat, h, w)
-            spatial_features.append(spatial)
-        
-        # Fuse features (resize to 224x224)
-        fused = self.fusion(*spatial_features)
-        
-        # Ensure output is 224x224
-        if fused.shape[-2:] != (224, 224):
-            fused = F.interpolate(fused, size=(224, 224), mode='bilinear', align_corners=False)
-        
-        # Predict force fields (Sparsh head semantics):
-        # - normal: sigmoid -> [0, 1]
-        # - shear: tanh * scale_flow -> roughly [-scale_flow, +scale_flow]
-        normal = self.head_normal(fused)  # [B, 1, 224, 224]
-        shear = self.head_shear(fused)    # [B, 2, 224, 224]
+        if isinstance(intermediate_features, dict):
+            encoder_activations = {k: v for k, v in intermediate_features.items()}
+        else:
+            if len(intermediate_features) != 4:
+                raise ValueError("Expected 4 intermediate feature tensors for layers [2,5,8,11]")
+            encoder_activations = {
+                't2': intermediate_features[0],
+                't5': intermediate_features[1],
+                't8': intermediate_features[2],
+                't11': intermediate_features[3],
+            }
 
-        # Apply activations matching Sparsh NormalShearHead
-        normal = torch.sigmoid(normal)
-        shear = torch.tanh(shear) * getattr(self, 'scale_flow', 20.0)
+        sample_key = list(encoder_activations.keys())[0]
+        start_idx = encoder_activations[sample_key].shape[1] - self.n_patches
+        for key in encoder_activations.keys():
+            encoder_activations[key] = self.norm(encoder_activations[key][:, start_idx:, :])
 
+        previous_stage = None
+        for i in np.arange(len(self.fusions) - 1, -1, -1, dtype=int):
+            hook_to_take = 't' + str(self.hooks[int(i)])
+            activation_result = encoder_activations[hook_to_take]
+            reassemble_result = self.reassembles[i](activation_result)
+            fusion_result = self.fusions[i](reassemble_result, previous_stage)
+            previous_stage = fusion_result
+
+        y = self.probe(previous_stage, mode='normal_shear')
+        normal = y[:, 0, :, :].unsqueeze(1)
+        shear = y[:, 1:, :, :]
         return normal, shear
 
 
@@ -456,7 +310,14 @@ class ForceEstimator:
         # Load pretrained weights
         print(f"Loading encoder from {encoder_path}...")
         encoder_weights = _load_encoder_checkpoint(encoder_path)
-        self.encoder.load_state_dict(encoder_weights, strict=False)
+        encoder_probe = self.encoder.model.load_state_dict(encoder_weights, strict=False)
+        if encoder_probe.missing_keys or encoder_probe.unexpected_keys:
+            raise RuntimeError(
+                "Strict Sparsh encoder load failed: "
+                f"missing_keys={encoder_probe.missing_keys}, "
+                f"unexpected_keys={encoder_probe.unexpected_keys}"
+            )
+        self.encoder.model.load_state_dict(encoder_weights, strict=True)
         
         print(f"Loading decoder from {decoder_path}...")
         decoder_weights = torch.load(decoder_path, map_location='cpu', weights_only=True)
@@ -469,7 +330,14 @@ class ForceEstimator:
                 cleaned_decoder[new_key] = value
             else:
                 cleaned_decoder[key] = value
-        self.decoder.load_state_dict(cleaned_decoder, strict=False)
+        decoder_probe = self.decoder.load_state_dict(cleaned_decoder, strict=False)
+        if decoder_probe.missing_keys or decoder_probe.unexpected_keys:
+            raise RuntimeError(
+                "Strict Sparsh decoder load failed: "
+                f"missing_keys={decoder_probe.missing_keys}, "
+                f"unexpected_keys={decoder_probe.unexpected_keys}"
+            )
+        self.decoder.load_state_dict(cleaned_decoder, strict=True)
         
         # Move to device
         self.encoder = self.encoder.to(self.device)

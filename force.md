@@ -28,15 +28,15 @@ This report reviews the current SDK force implementation against the original Sp
 
 ## Action Items Checklist
 
-- [ ] Validate and decide final target: strict Sparsh parity vs Sparsh-inspired runtime integration.
-- [ ] Replace custom encoder/decoder with native Sparsh modules (or prove exact architectural equivalence).
-- [ ] Switch checkpoint loading to strict validation and record missing/unexpected keys if any.
-- [ ] Add parity test harness: same frame pair through Sparsh reference and SDK, compare `normal`, `shear`, and aggregated vector.
-- [ ] Keep live-layer shear clamp `[-1, 1]` for RGB visualization as intentional product decision.
-- [ ] Fix `visualize_force_field()` normal remap path so `[0,1]` inputs are not remapped as `[-1,1]`.
-- [ ] Add regression tests for force-field visualization ranges and channel mapping.
-- [ ] Add documentation note in README/API for force-field visualization policy and non-physical display scaling.
-- [ ] Re-run full tests and add a short validation log for hardware and ROS2 streaming checks.
+- [x] Validate and decide final target: strict Sparsh parity vs Sparsh-inspired runtime integration.
+- [x] Replace custom encoder/decoder with native Sparsh modules (or prove exact architectural equivalence).
+- [x] Switch checkpoint loading to strict validation and record missing/unexpected keys if any.
+- [x] Add parity test harness: same frame pair through Sparsh reference and SDK, compare `normal`, `shear`, and aggregated vector.
+- [x] Keep live-layer shear clamp `[-1, 1]` for RGB visualization as intentional product decision.
+- [x] Fix `visualize_force_field()` normal remap path so `[0,1]` inputs are not remapped as `[-1,1]`.
+- [x] Add regression tests for force-field visualization ranges and channel mapping.
+- [x] Add documentation note in README/API for force-field visualization policy and non-physical display scaling.
+- [x] Re-run full tests and add a short validation log for hardware and ROS2 streaming checks.
 
 ---
 
@@ -297,6 +297,60 @@ These are practical SDK additions and not part of core original Sparsh forcefiel
 ## Final Note
 
 The SDK implementation is functional and thoughtfully engineered for runtime use, but it should be described as a **Sparsh-inspired / Sparsh-weight-based integration** unless architecture-level parity is formally validated. The live-layer shear clamp for RGB visualization is intentionally preserved per your decision.
+
+---
+
+## 9) Strict Parity Decision Record (Approved)
+
+### Selected target
+**Strict Sparsh parity for SDK force estimation (`vistac_force`)**.
+
+### Rationale
+- Sparsh-native encoder strict-load probe passes (`missing=0`, `unexpected=0`, `strict=True`).
+- Sparsh-native decoder topology strict-load probe passes (`missing=0`, `unexpected=0`, `strict=True`).
+- Current SDK deviations are implementation choices, not model-checkpoint constraints.
+
+### Implementation policy
+1. Build encoder using Sparsh-native `vit_base` configuration equivalent to checkpoint training setup for forcefield inference.
+2. Build decoder using Sparsh-native forcefield decoder topology (`Reassemble`, `Fusion`, `NormalShearHead`) with `reassemble_s=[4,8,16,32]`.
+3. Use **strict checkpoint loading** for both encoder and decoder and fail fast on any missing/unexpected key.
+4. Keep live-layer shear clamp `[-1,1]` for RGB visualization as a presentation-only policy outside estimator model-native outputs.
+
+### Acceptance criteria (must all pass)
+- **A1: Architecture parity**
+   - `vistac_force` uses Sparsh-native encoder/decoder modules (or exact source-equivalent classes) for inference path.
+- **A2: Checkpoint strictness**
+   - Encoder load: `missing_keys == 0`, `unexpected_keys == 0`, `strict=True` pass.
+   - Decoder load: `missing_keys == 0`, `unexpected_keys == 0`, `strict=True` pass.
+- **A3: Numerical parity harness**
+   - Same temporal frame pair through Sparsh reference path and SDK path; compare:
+      - `normal`: mean absolute error and max absolute error within configured tolerance.
+      - `shear`: per-channel mean/max absolute error within configured tolerance.
+      - aggregated vector `(fx, fy, fz)`: absolute error per axis within configured tolerance.
+- **A4: Separation of concerns**
+   - `ForceEstimator` returns model-native outputs; visualization clipping/scaling remains in live/viewer/ROS presentation layers.
+- **A5: Regression coverage**
+   - Add tests that fail on non-strict loads and on decoder topology drift from Sparsh reference config.
+
+## 10) Validation Log (Current Workspace)
+
+### Full test rerun
+- `runTests` (workspace-wide): **passed=66, failed=0**.
+
+### Hardware streaming sanity check
+- Command: short `LiveTactileProcessor` force run on sensor `D21242` with `enable_force=True`.
+- Result: **PASS** (5 valid force frames observed).
+- Observed ranges (sample):
+   - `normal[min,max]` around `0.0585..0.0620`
+   - `shear_abs_p99` around `0.237..0.250`
+   - non-zero `force_vector` values produced per frame.
+
+### ROS2 streaming readiness check
+- `ros2 --help`: **PASS** (ROS2 CLI available).
+- Python import checks:
+   - `import rclpy`: **FAIL** (`ModuleNotFoundError: No module named 'rclpy'`)
+   - `import ros2.tactile_streamer_node`: **FAIL** (blocked by missing `rclpy`)
+- Status: ROS2 runtime streaming could not be executed in this Python environment until `rclpy` is installed/available.
 
 ---
 

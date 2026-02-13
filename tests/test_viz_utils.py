@@ -9,6 +9,7 @@ matplotlib.use('Agg')  # Use non-interactive backend for testing
 import matplotlib.pyplot as plt
 from vistac_sdk.viz_utils import (
     plot_gradients,
+    force_field_to_rgb,
     visualize_force_field,
     visualize_force_vector
 )
@@ -141,6 +142,63 @@ class TestVisualizeForceField(unittest.TestCase):
         
         # High alpha should have higher values (more force field visible)
         self.assertGreater(result_high_alpha.mean(), result_low_alpha.mean())
+
+    def test_force_field_normal_preserves_0_1_range(self):
+        """Normal already in [0,1] should not be remapped as [-1,1]."""
+        normal = np.linspace(0.0, 1.0, 224 * 224, dtype=np.float32).reshape(224, 224)
+        shear = np.zeros((224, 224, 2), dtype=np.float32)
+
+        result = visualize_force_field(normal, shear)
+
+        blue = result[..., 2].astype(np.int32)
+        self.assertEqual(int(blue.min()), 0)
+        self.assertEqual(int(blue.max()), 255)
+
+    def test_force_field_normal_out_of_range_clips(self):
+        """Out-of-range normal values should be clipped to [0,1], not remapped."""
+        normal = np.array([
+            [-0.5, 0.0],
+            [0.5, 1.5],
+        ], dtype=np.float32)
+        shear = np.zeros((2, 2, 2), dtype=np.float32)
+
+        result = visualize_force_field(normal, shear)
+        blue = result[..., 2].astype(np.int32)
+
+        # Clipping expectation: [-0.5, 0.0, 0.5, 1.5] -> [0, 0, 127, 255]
+        self.assertEqual(int(blue[0, 0]), 0)
+        self.assertEqual(int(blue[0, 1]), 0)
+        self.assertEqual(int(blue[1, 0]), 127)
+        self.assertEqual(int(blue[1, 1]), 255)
+
+    def test_force_field_rgb_channel_mapping(self):
+        """Validate (R,G,B) = (Fx,Fy,Fz) mapping."""
+        normal = np.zeros((4, 4), dtype=np.float32)
+        shear = np.zeros((4, 4, 2), dtype=np.float32)
+
+        # Pixel A: fx=+1, fy=-1, fz=0.25 => R=255, G=0, B~64
+        shear[1, 1, 0] = 1.0
+        shear[1, 1, 1] = -1.0
+        normal[1, 1] = 0.25
+
+        # Pixel B: fx=-1, fy=+1, fz=1.0 => R=0, G=255, B=255
+        shear[2, 2, 0] = -1.0
+        shear[2, 2, 1] = 1.0
+        normal[2, 2] = 1.0
+
+        result = visualize_force_field(normal, shear)
+
+        self.assertEqual(tuple(result[1, 1].tolist()), (255, 0, 63))
+        self.assertEqual(tuple(result[2, 2].tolist()), (0, 255, 255))
+
+    def test_force_field_to_rgb_matches_visualize_without_overlay(self):
+        """Shared mapping helper should match visualize_force_field base output."""
+        normal = np.random.uniform(-0.5, 1.5, (32, 32)).astype(np.float32)
+        shear = np.random.uniform(-2.0, 2.0, (32, 32, 2)).astype(np.float32)
+
+        expected = force_field_to_rgb(normal, shear)
+        actual = visualize_force_field(normal, shear, overlay_image=None)
+        np.testing.assert_array_equal(actual, expected)
 
 
 class TestVisualizeForceVector(unittest.TestCase):

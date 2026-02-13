@@ -36,6 +36,7 @@ from .temporal_buffer import TemporalBuffer
 # Visualization
 from .viz_utils import (
     plot_gradients,
+    force_field_to_rgb,
     visualize_force_field,
     visualize_force_vector
 )
@@ -54,6 +55,7 @@ __all__ = [
     
     # Visualization
     "plot_gradients",
+    "force_field_to_rgb",
     "visualize_force_field",
     "visualize_force_vector",
 ]

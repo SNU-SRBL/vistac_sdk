@@ -215,6 +215,13 @@ Only requested outputs are computed per frame, enabling efficient performance:
 - `force_field`: dict with `normal` [224, 224] and `shear` [224, 224, 2]
 - `force_vector`: dict with `fx`, `fy`, `fz` scalars (normalized [-1, 1])
 
+### Force Visualization Policy
+- `ForceEstimator` outputs are model-native: `normal` is sigmoid-bounded to `[0,1]`; `shear` is model-scaled (Sparsh head semantics).
+- `LiveTactileProcessor` applies presentation policy for viewer/ROS outputs: `normal` is clamped to `[0,1]`, `shear` is clamped to `[-1,1]`.
+- `force_field_scale` is a **display-only multiplier** used for visualization consistency; it is not a physical calibration.
+- RGB mapping is centralized as `(R,G,B)=(Fx,Fy,Fz)` via `force_field_to_rgb` in `viz_utils`.
+- `visualize_force_field` clips out-of-range `normal` values to `[0,1]` (no `[-1,1]` remap fallback).
+
 ## Performance Characteristics
 
 | Component | GPU (CUDA) | CPU |

@@ -61,6 +61,30 @@ def plot_gradients(fig, ax, gx, gy=None, mask=None, mode="rgb", **kwargs):
         raise ValueError("Unknown plot gradient mode %s" % mode)
 
 
+def force_field_to_rgb(normal, shear):
+    """Convert force field arrays to RGB image using (R,G,B)=(Fx,Fy,Fz).
+
+    Args:
+        normal: np.array [H, W]; normal force component (Fz), expected in [0, 1].
+        shear: np.array [H, W, 2]; shear components (Fx, Fy), expected in [-1, 1].
+
+    Returns:
+        np.array [H, W, 3] uint8 RGB image.
+    """
+    normal_arr = np.asarray(normal, dtype=np.float32)
+    shear_arr = np.asarray(shear, dtype=np.float32)
+
+    normal_norm = np.clip(normal_arr, 0.0, 1.0)
+    shear_x_norm = np.clip((shear_arr[..., 0] + 1.0) / 2.0, 0.0, 1.0)
+    shear_y_norm = np.clip((shear_arr[..., 1] + 1.0) / 2.0, 0.0, 1.0)
+
+    red = (shear_x_norm * 255.0).astype(np.uint8)
+    green = (shear_y_norm * 255.0).astype(np.uint8)
+    blue = (normal_norm * 255.0).astype(np.uint8)
+
+    return np.stack([red, green, blue], axis=-1)
+
+
 def visualize_force_field(normal, shear, overlay_image=None, alpha=0.6):
     """
     Visualize force field as RGB heatmap.
@@ -74,20 +98,7 @@ def visualize_force_field(normal, shear, overlay_image=None, alpha=0.6):
     Returns:
         np.array [H, W, 3] uint8; RGB visualization of force field.
     """
-    # Normalize forces to [0, 1] for visualization
-    # Assuming forces are in normalized range [-1, 1]
-    normal_norm = np.clip((normal + 1) / 2, 0, 1)
-    shear_x_norm = np.clip((shear[..., 0] + 1) / 2, 0, 1)
-    shear_y_norm = np.clip((shear[..., 1] + 1) / 2, 0, 1)
-    
-    # Create RGB heatmap:
-    # R = Fx (shear_x), G = Fy (shear_y), B = Fz (normal)
-    # This maps per-point forces to (R,G,B) = (fx, fy, fz)
-    red = (shear_x_norm * 255).astype(np.uint8)
-    green = (shear_y_norm * 255).astype(np.uint8)
-    blue = (normal_norm * 255).astype(np.uint8)
-    
-    force_viz = np.stack([red, green, blue], axis=-1)
+    force_viz = force_field_to_rgb(normal, shear)
     
     # Overlay on image if provided
     if overlay_image is not None:
