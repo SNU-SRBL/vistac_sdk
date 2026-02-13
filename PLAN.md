@@ -19,6 +19,73 @@ This integration leverages **Sparsh** (https://github.com/facebookresearch/spars
 - Maintain backward compatibility via deprecation warnings
 - Enable ROS2 integration with force-specific message types
 
+## Findings (updated — 2026-02-13) ✅
+
+### Executive summary
+- The SDK now returns **normalized** `force_field` from the estimator (no `force_field_physical`). Visual scaling and all painting (image + pointcloud coloring) are applied only at the live/presentation layer (`LiveTactileProcessor`).
+- `force_vector` continues to expose a **physical** per-axis scaled value (`force_vector_physical`) using `force_vector_scale` from YAML — that behavior is unchanged.
+- Defensive guard prevents applying `force_field_scale` when the estimator output already appears scaled (observed when |value| > 2.0). Unit tests pass; one diagnostic remains: intermittent model/baseline outputs with magnitude > 2.0.
+
+### Full computation flow (raw → visualization)
+1. Raw capture
+   - Camera frame(s) acquired by `LiveCore` / device driver.
+2. Preprocessing & temporal buffer
+   - `TactileProcessor` prepares inputs (background subtraction, resize to 224×224, concat t and t-n frames).
+   - Uses `background_data.npz` and `bg_offset` (default 0.5) matching Sparsh preprocessing.
+3. Model inference (Sparsh) — `vistac_force.ForceEstimator`
+   - Input shape: `[1, 6, 224, 224]` → model returns `force_field` (normal + shear).
+   - Output semantics: **normalized** model units (expected ≈ [-1, 1]).
+4. Post‑process inside estimator
+   - Baseline subtraction (optional runtime baseline) occurs in `ForceEstimator.estimate()` when enabled.
+   - `force_vector` aggregation computed from mean/sum of dense fields, then converted to `force_vector_physical` using `force_vector_scale` YAML per-axis.
+   - NO `force_field_physical` is produced anywhere.
+5. Live presentation (visual-only) — `LiveTactileProcessor.get_latest_output()`
+   - Applies `force_field_scale` **only** here (visual multiplier).
+   - Guard: scaling is skipped if max_abs(normal or shear) > 2.0 (prevents double-scaling/overflow).
+   - Recomputes `pointcloud_colors` and `pointcloud_forces` from the (possibly scaled) `force_field` so image and pointcloud remain consistent.
+6. Viewer / ROS / Tests
+   - Viewer (`apps/live_viewer.py`) reads live output and maps force channels → RGB (R=Fx, G=Fy, B=Fz) with clipping behavior in the visual mapper.
+   - ROS node (`ros2/tactile_streamer_node.py`) publishes the same live outputs, controlled by launch params (`force_field_scale`, `force_field_baseline`).
+
+### Current situation — what is implemented and validated
+- Centralized visual scaling and painting in `LiveTactileProcessor` — completed.
+- `TactileProcessor` returns raw `force_field` (no painting) — completed.
+- `ForceEstimator` returns normalized `force_field` and computes `force_vector_physical` using `force_vector_scale` — completed.
+- Viewer and ROS parameters expose `force_field_scale` and `force_field_baseline` — completed.
+- Unit tests updated and passing (all tests green at time of change). ✅
+- Outstanding diagnostic: occasional estimator outputs whose absolute magnitudes exceed expected range (observed > 2.0). This triggers the Live-layer guard and a warning; root cause (model vs. baseline vs. pre-scaling) is still under investigation.
+
+### Full structure — who does what (quick reference)
+- `vistac_sdk/vistac_sdk/vistac_force.py` — ForceEstimator (model inference, baseline subtraction, returns normalized fields, computes force_vector_physical).
+- `vistac_sdk/vistac_sdk/tactile_processor.py` — data-layer processor; prepares inputs and returns raw outputs (depth, force_field, force_vector, pointcloud geometry).
+- `vistac_sdk/vistac_sdk/live_core.py` — LiveTactileProcessor; runtime presentation, applies `force_field_scale`, recomputes painting for images/pointclouds, exposes runtime flags.
+- `apps/live_viewer.py` — interactive visualization; receives live outputs and renders images/pointclouds.
+- `ros2/tactile_streamer_node.py` + launch files — ROS publishing and runtime parameter exposure.
+- `tests/` — unit tests covering estimator outputs, baseline handling, scale guards, and viewer mapping.
+
+### Simple implementation explanations & important invariants
+- Single-responsibility separation:
+  - Estimator → model + normalized outputs
+  - Processor → data preparation + raw outputs
+  - Live layer → visualization only
+- Why no `force_field_physical`:
+  - Physical scaling is only meaningful for a single aggregated vector (`force_vector_physical`) — requirement preserved.
+  - Per-pixel physical scaling would invite unit mismatch and risk double-scaling in downstream consumers.
+- Visual scaling invariant:
+  - `force_field_scale` is a runtime visual multiplier and must be applied exactly once (done in `LiveTactileProcessor`).
+- Double‑scaling guard:
+  - If estimator outputs already look scaled (max_abs > 2.0), the live layer refuses to apply `force_field_scale` and emits a warning.
+- Pointcloud/image consistency:
+  - After any visual scaling, `pointcloud_colors` and `pointcloud_forces` are recomputed from the scaled `force_field` so imagery and pointclouds match.
+
+### Diagnostic summary & next steps (recommended)
+- Immediate diagnostic added: instrument `ForceEstimator.estimate()` to log min/max/mean/std right after model forward and after baseline subtraction. This will tell us whether the out‑of‑range values originate from the model or from baseline/subtraction.
+- If the model output is occasionally large: add input validation (clamp/scale) and consider retraining/normalization check.
+- If baseline subtraction causes spikes: examine `bg_offset` and clipping logic in preprocessing and add unit tests reproducing the failure case.
+- Add a unit test asserting that `force_field` max_abs ≤ 2.0 in normal conditions (to catch regressions early).
+
+---
+
 ## Implementation Guidelines for AI Coding Agents
 
 **CRITICAL**: These guidelines MUST be followed during implementation.
@@ -939,6 +1006,11 @@ if 'force_field' in outputs and not self._force_enabled:
   - `encoder: sparsh-dino-base` (ViT-base encoder for decoder compatibility)
   - `decoder: sparsh-digit-forcefield` (force field decoder)
   - `bg_offset: 0.5` (background subtraction offset)
+  - `force_vector_scale: [1.0, 1.0, 1.0]` (per-axis scale to convert normalized `force_vector` → physical units; default = identity)
+
+  **Note**: `force_field_baseline` is no longer a sensor YAML parameter — baseline enabling is runtime-only via constructor/CLI (`force_field_baseline`). YAML entries for `force_field_baseline` have been removed.
+
+  **Note**: `force_offset` (persistent per-axis offset) is *intentionally NOT* added to the YAML configuration. Runtime baseline subtraction remains in place for session zeroing; YAML stores only the per-axis `force_vector_scale` for physical‑unit conversion.
 
 **Deviations from plan**:
 - **None** - Implemented exactly as specified
@@ -1492,9 +1564,9 @@ print(f"Decoder keys: {decoder.keys()}")
 
 7. **Force baseline & scaling (runtime)** - ADDED
    - `force_vector` baseline subtraction implemented: SDK now measures a no-contact baseline (model output on `background, background`) during `load_background()` and subtracts it from subsequent `force_vector` outputs (runtime bias removal). ✅
-   - `force_field` (dense heatmap) **NOT** baseline-subtracted to remain consistent with Sparsh demos; Sparsh uses background templates for masking/normalization rather than per-pixel subtraction. ✅
-   - `force_scale` (conversion from normalized units → physical units) and visual scaling for `force_field` are **planned** but intentionally deferred for a later session (no changes in this iteration). ⏳
-   - Unit tests added for baseline subtraction and behavior validated (tests pass).
+   - `force_field` (dense heatmap) **runtime baseline subtraction will be added as an optional, configurable feature**: the SDK will compute a per‑pixel background template during `load_background()` and subtract it from subsequent `force_field` outputs when enabled (default: **disabled** to preserve Sparsh demo parity). This is a runtime correction only (no persistent YAML offset). ✅
+   - `force_vector_scale` (conversion from normalized units → physical units) will be added to sensor YAMLs (per‑axis scaling only). `force_offset` (persistent YAML offset) will **not** be added — runtime baseline subtraction remains the zeroing mechanism. Visual scaling for `force_field` is strictly for visualization (no physical‑unit calibration is applied). ⏳
+   - Unit tests added for `force_vector` baseline subtraction and optional `force_field` baseline subtraction; behavior validated (tests pass).
 
 ### Design Decisions Affirmed
 
