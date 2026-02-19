@@ -6,6 +6,7 @@ import unittest
 import time
 import numpy as np
 import os
+import torch
 
 from vistac_sdk.tactile_processor import TactileProcessor
 from vistac_sdk.utils import load_config
@@ -35,7 +36,7 @@ class TestTactileProcessorInit(unittest.TestCase):
             model_path=self.model_path,
             enable_depth=True,
             enable_force=True,
-            device='cpu'
+            device=('cuda' if torch.cuda.is_available() else 'cpu')
         )
         
         self.assertIsNotNone(processor.depth_estimator)
@@ -49,7 +50,7 @@ class TestTactileProcessorInit(unittest.TestCase):
             model_path=self.model_path,
             enable_depth=True,
             enable_force=False,
-            device='cpu'
+            device=('cuda' if torch.cuda.is_available() else 'cpu')
         )
         
         self.assertIsNotNone(processor.depth_estimator)
@@ -63,7 +64,7 @@ class TestTactileProcessorInit(unittest.TestCase):
             model_path=None,
             enable_depth=False,
             enable_force=True,
-            device='cpu'
+            device=('cuda' if torch.cuda.is_available() else 'cpu')
         )
         
         self.assertIsNone(processor.depth_estimator)
@@ -87,7 +88,7 @@ class TestTactileProcessorInit(unittest.TestCase):
             model_path=self.model_path,
             enable_depth=True,
             enable_force=False,
-            device='cpu'
+            device=('cuda' if torch.cuda.is_available() else 'cpu')
         )
         
         processor.set_ppmm(25.0)
@@ -124,7 +125,7 @@ class TestTactileProcessorBackground(unittest.TestCase):
             model_path=self.model_path,
             enable_depth=True,
             enable_force=True,
-            device='cpu'
+            device=('cuda' if torch.cuda.is_available() else 'cpu')
         )
         
         bg_image = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
@@ -140,7 +141,7 @@ class TestTactileProcessorBackground(unittest.TestCase):
             model_path=self.model_path,
             enable_depth=True,
             enable_force=False,
-            device='cpu'
+            device=('cuda' if torch.cuda.is_available() else 'cpu')
         )
         
         bg_image = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
@@ -175,7 +176,7 @@ class TestTactileProcessorProcess(unittest.TestCase):
             model_path=self.model_path,
             enable_depth=True,
             enable_force=False,
-            device='cpu',
+            device=('cuda' if torch.cuda.is_available() else 'cpu'),
             ppmm=self.ppmm
         )
         processor.load_background(self.bg_image)
@@ -194,7 +195,7 @@ class TestTactileProcessorProcess(unittest.TestCase):
             model_path=self.model_path,
             enable_depth=True,
             enable_force=False,
-            device='cpu',
+            device=('cuda' if torch.cuda.is_available() else 'cpu'),
             ppmm=self.ppmm
         )
         processor.load_background(self.bg_image)
@@ -217,7 +218,7 @@ class TestTactileProcessorProcess(unittest.TestCase):
             model_path=None,
             enable_depth=False,
             enable_force=True,
-            device='cpu',
+            device=('cuda' if torch.cuda.is_available() else 'cpu'),
             temporal_stride=5
         )
         processor.load_background(self.bg_image)
@@ -240,7 +241,7 @@ class TestTactileProcessorProcess(unittest.TestCase):
             model_path=None,
             enable_depth=False,
             enable_force=True,
-            device='cpu',
+            device=('cuda' if torch.cuda.is_available() else 'cpu'),
             temporal_stride=5,
             force_field_baseline=True
         )
@@ -252,7 +253,7 @@ class TestTactileProcessorProcess(unittest.TestCase):
             model_path=None,
             enable_depth=False,
             enable_force=True,
-            device='cpu',
+            device=('cuda' if torch.cuda.is_available() else 'cpu'),
             temporal_stride=5
         )
         processor.load_background(self.bg_image)
@@ -294,7 +295,7 @@ class TestTactileProcessorProcess(unittest.TestCase):
             model_path=None,
             enable_depth=False,
             enable_force=True,
-            device='cpu'
+            device=('cuda' if torch.cuda.is_available() else 'cpu')
         )
         
         with self.assertRaises(ValueError) as cm:
@@ -307,7 +308,7 @@ class TestTactileProcessorProcess(unittest.TestCase):
             model_path=self.model_path,
             enable_depth=True,
             enable_force=False,
-            device='cpu'
+            device=('cuda' if torch.cuda.is_available() else 'cpu')
         )
         
         with self.assertRaises(ValueError) as cm:
@@ -320,7 +321,7 @@ class TestTactileProcessorProcess(unittest.TestCase):
             model_path=self.model_path,
             enable_depth=True,
             enable_force=False,
-            device='cpu'
+            device=('cuda' if torch.cuda.is_available() else 'cpu')
         )
         processor.load_background(self.bg_image)
         
@@ -334,7 +335,7 @@ class TestTactileProcessorProcess(unittest.TestCase):
             model_path=self.model_path,
             enable_depth=True,
             enable_force=False,
-            device='cpu',
+            device=('cuda' if torch.cuda.is_available() else 'cpu'),
             ppmm=20.0  # Constructor value
         )
         processor.load_background(self.bg_image)
@@ -370,7 +371,7 @@ class TestTactileProcessorThreading(unittest.TestCase):
             model_path=self.model_path,
             enable_depth=True,
             enable_force=False,
-            device='cpu'
+            device=('cuda' if torch.cuda.is_available() else 'cpu')
         )
         processor.load_background(self.bg_image)
         
@@ -389,7 +390,7 @@ class TestTactileProcessorThreading(unittest.TestCase):
             model_path=self.model_path,
             enable_depth=True,
             enable_force=False,
-            device='cpu'
+            device=('cuda' if torch.cuda.is_available() else 'cpu')
         )
         processor.load_background(self.bg_image)
         
@@ -415,7 +416,7 @@ class TestTactileProcessorThreading(unittest.TestCase):
             model_path=self.model_path,
             enable_depth=True,
             enable_force=False,
-            device='cpu'
+            device=('cuda' if torch.cuda.is_available() else 'cpu')
         )
         processor.load_background(self.bg_image)
         
@@ -456,7 +457,7 @@ class TestTactileProcessorDefaultOutputs(unittest.TestCase):
             model_path=self.model_path,
             enable_depth=True,
             enable_force=False,
-            device='cpu',
+            device=('cuda' if torch.cuda.is_available() else 'cpu'),
             ppmm=25.0
         )
         processor.load_background(self.bg_image)
@@ -475,7 +476,7 @@ class TestTactileProcessorDefaultOutputs(unittest.TestCase):
             model_path=None,
             enable_depth=False,
             enable_force=True,
-            device='cpu'
+            device=('cuda' if torch.cuda.is_available() else 'cpu')
         )
         processor.load_background(self.bg_image)
         
