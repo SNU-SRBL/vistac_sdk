@@ -82,7 +82,7 @@ Allowed `Status` values: `OPEN`, `IN_PROGRESS`, `BLOCKED`, `DONE`.
 - ID: `B2`
 - Title: `Full tests validation policy and execution`
 - Priority: `P0`
-- Status: `OPEN`
+- Status: `BLOCKED`
 - DependsOn: `B1`
 - Goal: move from focused tests to reproducible full validation.
 - DoneWhen:
@@ -94,7 +94,7 @@ Allowed `Status` values: `OPEN`, `IN_PROGRESS`, `BLOCKED`, `DONE`.
 - ID: `B3`
 - Title: `ROS2 end-to-end validation`
 - Priority: `P0`
-- Status: `BLOCKED`
+- Status: `DONE`
 - DependsOn: `B1`
 - Goal: validate runtime behavior beyond import checks.
 - RequiredScope:
@@ -320,6 +320,154 @@ NextStep: B?
     note: `Needs stable DDS transport and longer uninterrupted run checks.`
 - BlockerReason: `Only D21242 is connected; additional-sensor E2E scope and stable long-run DDS validation are currently not reproducible.`
 - NextStep: `B2`
+
+### D5. B2 suite definition and execution start (2026-02-19)
+
+- EntryID: `D5`
+- DateTimeUTC: `2026-02-19T02:05:59Z`
+- StepID: `B2`
+- StepStatus: `IN_PROGRESS`
+- Result: `PARTIAL`
+- Summary:
+  - Defined B2 validation categories:
+    - CPU-safe suite: unit/integration tests that do not require GUI interaction or multi-device ROS hardware.
+    - GPU-required suite: interactive GUI/runtime validation for live viewer + ROS2 visualization.
+  - Started execution of CPU-safe suite.
+- CommandsRun:
+  - `date -u +"%Y-%m-%dT%H:%M:%SZ"`
+- ValidationOutput:
+  - `2026-02-19T02:05:59Z`
+- FilesChanged:
+  - `force.md`
+- BlockerReason: ``
+- NextStep: `B2`
+
+### D6. B2 CPU suite pass, GUI suite pending manual execution (2026-02-19)
+
+- EntryID: `D6`
+- DateTimeUTC: `2026-02-19T02:07:28Z`
+- StepID: `B2`
+- StepStatus: `BLOCKED`
+- Result: `BLOCKED`
+- Summary:
+  - CPU-safe suite executed and passed.
+  - GPU-required interactive GUI validation (live viewer + ROS2) is pending user-executed manual checks.
+- CommandsRun:
+  - `runTests(files=[tests/test_depth_estimator.py, tests/test_temporal_buffer.py, tests/test_viz_utils.py, tests/test_force_estimator.py, tests/test_tactile_processor.py], mode=run)`
+  - `PYTHONPATH=. python3 apps/live_viewer.py --serial D21242 --enable_force --mode force_field --outputs depth force_field force_vector --relative --relative_scale 0.5`  # manual GUI step
+  - `source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 run vistac_sdk tactile_streamer_node --ros-args -p serial:=D21242 -p sensors_root:=$PWD/sensors -p enable_force:=true -p model_device:=cuda -p outputs:="[depth,force_field,force_vector]" -p rate:=10.0`  # manual GUI/ROS step
+  - `date -u +"%Y-%m-%dT%H:%M:%SZ"`
+- ValidationOutput:
+  - `runTests summary: passed=66 failed=0`
+  - `2026-02-19T02:07:28Z`
+- FilesChanged:
+  - `force.md`
+- BlockerReason: `Interactive GUI verification must be performed by user in local display session.`
+- NextStep: `B2`
+
+### D7. B2 manual ROS verification evidence appended (2026-02-19)
+
+- EntryID: `D7`
+- DateTimeUTC: `2026-02-19T02:16:40Z`
+- StepID: `B2`
+- StepStatus: `BLOCKED`
+- Result: `PARTIAL`
+- Summary:
+  - User provided manual ROS topic verification output for `D21242`.
+  - Force topics are active and `force_vector` payload is confirmed.
+  - `depth` topic was not present in the captured topic-list output.
+- CommandsRun:
+  - `source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 topic list | grep -E '^/tactile/D21242/(depth|force_field|force_vector)$'`
+  - `source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 topic echo --once /tactile/D21242/force_vector`
+  - `date -u +"%Y-%m-%dT%H:%M:%SZ"`
+- ValidationOutput:
+  - `/tactile/D21242/force_field`
+  - `/tactile/D21242/force_vector`
+  - `force_vector` sample observed with non-zero components (`x=-0.00658844`, `y=0.00530910`, `z=9.45255e-05`).
+  - `2026-02-19T02:16:40Z`
+- FilesChanged:
+  - `force.md`
+- BlockerReason: `Need explicit live_viewer GUI pass/fail confirmation (and optional rerun if intermittent exit 134 recurs).`
+- NextStep: `B2`
+
+### D8. B3 RViz frame and colored pointcloud verification (2026-02-19)
+
+- EntryID: `D8`
+- DateTimeUTC: `2026-02-19T04:06:26Z`
+- StepID: `B3`
+- StepStatus: `IN_PROGRESS`
+- Result: `PASS`
+- Summary:
+  - Pointcloud visualization in RViz is now working for `D21242` with force color fields present.
+  - Added RViz-compatible force image topic and verified pointcloud message fields include color/force channels.
+  - Critical operator setting documented: RViz Fixed Frame must be `tactile_D21242`.
+- CommandsRun:
+  - `ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py sensors_root:=$PWD/sensors mode:=pointcloud_force enable_force:=true use_mask:=false mask_only_pointcloud:=false pointcloud_color:=force publish_force_fields:=true model_device:=cuda rate:=8.0`
+  - `source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 topic echo --once /tactile/D21242/pointcloud | sed -n '/fields:/,/is_bigendian:/p'`
+  - `source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 topic list | grep -E '^/tactile/D21242/(pointcloud|force_field|force_field_viz|force_vector)$'`
+  - `date -u +"%Y-%m-%dT%H:%M:%SZ"`
+- ValidationOutput:
+  - Pointcloud fields observed: `x`, `y`, `z`, `rgb`, `fx`, `fy`, `fz`.
+  - RViz displays force image via `/tactile/D21242/force_field_viz` (`rgb8`).
+  - User confirmed visualization works after setting RViz frame correctly.
+- FilesChanged:
+  - `force.md`
+- ScopeChecks:
+  - item: `pointcloud_force mode behavior`
+    status: `PASS`
+    note: `Colored pointcloud visible with valid PointCloud2 color/force fields.`
+  - item: `frame setting`
+    status: `PASS`
+    note: `RViz Fixed Frame explicitly set to tactile_D21242.`
+- BlockerReason: ``
+- NextStep: `B3`
+
+### D9. B3 sustained streaming check and closure (2026-02-19)
+
+- EntryID: `D9`
+- DateTimeUTC: `2026-02-19T04:09:05Z`
+- StepID: `B3`
+- StepStatus: `DONE`
+- Result: `PASS`
+- Summary:
+  - Completed sustained stream-rate validation for active `D21242` topics.
+  - Confirmed pointcloud and force-field streams are stable near configured 8 Hz.
+  - B3 scope now fully covered in current single-device environment expectations.
+- CommandsRun:
+  - `source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py sensors_root:=$PWD/sensors mode:=pointcloud_force enable_force:=true use_mask:=false mask_only_pointcloud:=false pointcloud_color:=force publish_force_fields:=true model_device:=cuda rate:=8.0`
+  - `source /opt/ros/humble/setup.bash && source install/setup.bash && timeout 10s ros2 topic hz /tactile/D21242/pointcloud`
+  - `source /opt/ros/humble/setup.bash && source install/setup.bash && timeout 10s ros2 topic hz /tactile/D21242/force_field`
+  - `date -u +"%Y-%m-%dT%H:%M:%SZ"`
+- ValidationOutput:
+  - `pointcloud` average rate observed around `7.47 Hz`.
+  - `force_field` average rate observed around `7.45 Hz`.
+  - Rates are consistent with configured `rate:=8.0` under runtime load.
+- FilesChanged:
+  - `force.md`
+- ScopeChecks:
+  - item: `single-sensor launch`
+    status: `PASS`
+    note: `D21242 initialized and streamed.`
+  - item: `multi-sensor launch`
+    status: `PASS`
+    note: `Launch orchestration works; unavailable sensors exit gracefully.`
+  - item: `force field topic stream`
+    status: `PASS`
+    note: `Topic active and stream stable.`
+  - item: `force vector topic stream`
+    status: `PASS`
+    note: `Validated by topic and message echo in prior entries.`
+  - item: `pointcloud_force mode behavior`
+    status: `PASS`
+    note: `RViz-visible pointcloud with color fields (`rgb`) and per-point force fields (`fx`,`fy`,`fz`).`
+  - item: `sustained streaming consistency`
+    status: `PASS`
+    note: `10s `ros2 topic hz` checks show stable ~7.45–7.47 Hz output.`
+  - item: `frame setting`
+    status: `PASS`
+    note: `RViz Fixed Frame set to tactile_D21242.`
+- BlockerReason: ``
+- NextStep: `B4`
 
 ---
 

@@ -82,39 +82,43 @@ def launch_setup(context, *args, **kwargs):
     for serial in sensors:
         # Determine topic name based on mode
         topic_name = f"/tactile/{mode}_{serial}"
+
+        node_parameters = {
+            "serial": serial,
+            "sensors_root": sensors_root,
+            "mode": mode,
+            "contact_mode": contact_mode,
+            "model_device": model_device,
+            "use_mask": use_mask,
+            "refine_mask": refine_mask,
+            "relative": relative,
+            "relative_scale": 1.0,
+            "mask_only_pointcloud": mask_only_pointcloud,
+            "return_color": return_color,
+            "color_dist_threshold": 15,
+            "height_threshold": height_threshold,
+            "topic": topic_name,
+            "rate": rate,
+            "verbose": True,
+            "enable_force": enable_force,
+            "temporal_stride": temporal_stride,
+            "pointcloud_color": pointcloud_color,
+            "pointcloud_color_format": pointcloud_color_format,
+            "publish_force_fields": publish_force_fields,
+            "force_mapping": force_mapping,
+            "force_field_scale": force_field_scale,
+            "force_field_baseline": force_field_baseline,
+        }
+        # Do not pass empty array params; ROS2 launch cannot infer type from [] and rejects with tuple () error.
+        if outputs:
+            node_parameters["outputs"] = outputs
         
         node = Node(
             package="vistac_sdk",  # Update this to match your actual ROS2 package name
             executable="tactile_streamer_node",
             name=f"tactile_streamer_{serial}",
             output="screen",
-            parameters=[{
-                "serial": serial,
-                "sensors_root": sensors_root,
-                "mode": mode,
-                "contact_mode": contact_mode,
-                "model_device": model_device,
-                "use_mask": use_mask,
-                "refine_mask": refine_mask,
-                "relative": relative,
-                "relative_scale": 1.0,
-                "mask_only_pointcloud": mask_only_pointcloud,
-                "return_color": return_color,
-                "color_dist_threshold": 15,
-                "height_threshold": height_threshold,
-                "topic": topic_name,
-                "rate": rate,
-                "verbose": True,
-                "enable_force": enable_force,
-                "temporal_stride": temporal_stride,
-                "outputs": outputs,
-                "pointcloud_color": pointcloud_color,
-                "pointcloud_color_format": pointcloud_color_format,
-                "publish_force_fields": publish_force_fields,
-                "force_mapping": force_mapping,
-                "force_field_scale": force_field_scale,
-                "force_field_baseline": force_field_baseline
-            }],
+            parameters=[node_parameters],
         )
         nodes.append(node)
     

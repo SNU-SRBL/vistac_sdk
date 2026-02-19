@@ -238,7 +238,7 @@ class LiveTactileProcessor:
                 # Recompute pointcloud colors/forces from the (possibly scaled) force_field
                 try:
                     pc = result.get('pointcloud')
-                    if pc is not None and 'pointcloud_colors' in result:
+                    if pc is not None:
                         force_rgb = force_field_to_rgb(normal_scaled, shear_scaled)
 
                         th, tw = frame.shape[0], frame.shape[1]
@@ -255,7 +255,7 @@ class LiveTactileProcessor:
 
                         result['pointcloud_colors'] = colors_flat
 
-                    if pc is not None and 'pointcloud_forces' in result:
+                    if pc is not None:
                         # Recompute per-point raw forces fx,fy,fz from scaled fields
                         fx_img = shear_scaled[..., 0]
                         fy_img = shear_scaled[..., 1]

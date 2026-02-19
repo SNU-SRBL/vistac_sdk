@@ -12,6 +12,7 @@ import numpy as np
 import struct
 
 from vistac_sdk.live_core import LiveTactileProcessor
+from vistac_sdk.viz_utils import force_field_to_rgb
 
 '''
 This ROS2 node streams tactile data from a sensor using the LiveReconstructor class.
@@ -197,6 +198,8 @@ class TactileStreamerNode(Node):
                     self.output_publishers['pointcloud'] = self.create_publisher(PointCloud2, f"{base_topic}/pointcloud", 10)
                 elif output == 'force_field':
                     self.output_publishers['force_field'] = self.create_publisher(Image, f"{base_topic}/force_field", 10)
+                    # RViz Image display does not support 32FC3; publish an rgb8 visualization topic as well.
+                    self.output_publishers['force_field_viz'] = self.create_publisher(Image, f"{base_topic}/force_field_viz", 10)
                 elif output == 'force_vector':
                     self.output_publishers['force_vector'] = self.create_publisher(WrenchStamped, f"{base_topic}/force_vector", 10)
             
@@ -227,6 +230,104 @@ class TactileStreamerNode(Node):
                 # Prefer colors provided in result dict (computed from force_field)
                 colors = result_dict.get('pointcloud_colors')
                 forces = result_dict.get('pointcloud_forces')  # Nx3 array of raw forces (fx,fy,fz)
+
+                # In pointcloud_force mode, derive colors directly from the published force_field image
+                # (32FC3 with channels R=Fx, G=Fy, B=Fz) to guarantee color fields in PointCloud2.
+                if self.pointcloud_color == 'force' and colors is None:
+                    ff_msg = result_dict.get('force_field')
+                    if isinstance(ff_msg, dict):
+                        normal = ff_msg.get('normal')
+                        shear = ff_msg.get('shear')
+                        if normal is not None and shear is not None:
+                            try:
+                                normal_arr = np.asarray(normal, dtype=np.float32)
+                                shear_arr = np.asarray(shear, dtype=np.float32)
+
+                                # Resize force maps to pointcloud frame resolution
+                                th, tw = frame.shape[0], frame.shape[1]
+                                if normal_arr.shape != (th, tw):
+                                    normal_arr = cv2.resize(normal_arr, (tw, th), interpolation=cv2.INTER_NEAREST)
+                                if shear_arr.shape[:2] != (th, tw):
+                                    shear_arr = cv2.resize(shear_arr, (tw, th), interpolation=cv2.INTER_NEAREST)
+
+                                colors_flat = np.zeros((th * tw, 3), dtype=np.float32)
+                                colors_flat[:, 0] = np.clip(shear_arr[..., 0].reshape(-1), -1.0, 1.0) * 0.5 + 0.5
+                                colors_flat[:, 1] = np.clip(shear_arr[..., 1].reshape(-1), -1.0, 1.0) * 0.5 + 0.5
+                                colors_flat[:, 2] = np.clip(normal_arr.reshape(-1), 0.0, 1.0)
+
+                                if pc.shape[0] != (th * tw):
+                                    mask = result_dict.get('mask')
+                                    if mask is not None:
+                                        mask_flat = np.asarray(mask).ravel().astype(bool)
+                                        if mask_flat.shape[0] == th * tw:
+                                            colors_flat = colors_flat[mask_flat]
+
+                                colors = colors_flat
+
+                                if self.publish_force_fields and forces is None:
+                                    fx_flat = shear_arr[..., 0].reshape(-1)
+                                    fy_flat = shear_arr[..., 1].reshape(-1)
+                                    fz_flat = normal_arr.reshape(-1)
+                                    if pc.shape[0] != (th * tw):
+                                        mask = result_dict.get('mask')
+                                        if mask is not None:
+                                            mask_flat = np.asarray(mask).ravel().astype(bool)
+                                            if mask_flat.shape[0] == th * tw:
+                                                fx_flat = fx_flat[mask_flat]
+                                                fy_flat = fy_flat[mask_flat]
+                                                fz_flat = fz_flat[mask_flat]
+                                    forces = np.stack([fx_flat, fy_flat, fz_flat], axis=1).astype(np.float32)
+                            except Exception:
+                                pass
+
+                # Fallback: derive colors/forces directly from force_field if requested
+                # and helper arrays were not precomputed upstream.
+                if self.pointcloud_color == 'force' and colors is None:
+                    ff = result_dict.get('force_field')
+                    if isinstance(ff, dict):
+                        normal = ff.get('normal')
+                        shear = ff.get('shear')
+                        if normal is not None and shear is not None:
+                            try:
+                                normal_arr = np.asarray(normal, dtype=np.float32)
+                                shear_arr = np.asarray(shear, dtype=np.float32)
+                                force_rgb = force_field_to_rgb(normal_arr, shear_arr)
+
+                                th, tw = frame.shape[0], frame.shape[1]
+                                fh, fw = force_rgb.shape[:2]
+                                if (fh, fw) != (th, tw):
+                                    force_rgb = cv2.resize(force_rgb, (tw, th), interpolation=cv2.INTER_NEAREST)
+
+                                colors_flat = force_rgb.reshape(-1, 3) / 255.0
+
+                                mask = result_dict.get('mask')
+                                if mask is not None and pc.shape[0] != (th * tw):
+                                    mask_flat = mask.ravel()
+                                    if mask_flat.shape[0] == th * tw:
+                                        colors_flat = colors_flat[mask_flat]
+
+                                colors = colors_flat.astype(np.float32)
+
+                                if self.publish_force_fields and forces is None:
+                                    fx_img = shear_arr[..., 0]
+                                    fy_img = shear_arr[..., 1]
+                                    fz_img = normal_arr
+                                    if (fx_img.shape[0], fx_img.shape[1]) != (th, tw):
+                                        fx_img = cv2.resize(fx_img, (tw, th), interpolation=cv2.INTER_NEAREST)
+                                        fy_img = cv2.resize(fy_img, (tw, th), interpolation=cv2.INTER_NEAREST)
+                                        fz_img = cv2.resize(fz_img, (tw, th), interpolation=cv2.INTER_NEAREST)
+                                    fx_flat = fx_img.reshape(-1)
+                                    fy_flat = fy_img.reshape(-1)
+                                    fz_flat = fz_img.reshape(-1)
+                                    if mask is not None and pc.shape[0] != (th * tw):
+                                        mask_flat = mask.ravel()
+                                        if mask_flat.shape[0] == th * tw:
+                                            fx_flat = fx_flat[mask_flat]
+                                            fy_flat = fy_flat[mask_flat]
+                                            fz_flat = fz_flat[mask_flat]
+                                    forces = np.stack([fx_flat, fy_flat, fz_flat], axis=1).astype(np.float32)
+                            except Exception:
+                                pass
 
                 if colors is not None:
                     msg = self.create_pointcloud2_msg(pc, header, colors=colors, color_format=self.pointcloud_color_format, forces=forces if self.publish_force_fields else None)
@@ -270,6 +371,14 @@ class TactileStreamerNode(Node):
                         msg = self.bridge.cv2_to_imgmsg(force_rgb, encoding='32FC3')
                         msg.header = header
                         publisher.publish(msg)
+
+                        # Additional RViz-friendly visualization topic (rgb8)
+                        viz_publisher = self.output_publishers.get('force_field_viz')
+                        if viz_publisher is not None:
+                            force_rgb8 = force_field_to_rgb(normal, shear)
+                            viz_msg = self.bridge.cv2_to_imgmsg(force_rgb8, encoding='rgb8')
+                            viz_msg.header = header
+                            viz_publisher.publish(viz_msg)
             
             elif output_name == 'force_vector':
                 # Handle force vector output - dict with 'fx', 'fy', 'fz'
