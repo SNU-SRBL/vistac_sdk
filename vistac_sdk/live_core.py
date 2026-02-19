@@ -110,8 +110,18 @@ class LiveTactileProcessor:
         
         # Determine model paths for force estimation
         sdk_root = pathlib.Path(__file__).resolve().parents[1]
-        force_encoder_path = str(sdk_root / "models" / "sparsh_dino_base_encoder.ckpt")
-        force_decoder_path = str(sdk_root / "models" / "sparsh_digit_forcefield_decoder.pth")
+
+        def resolve_force_model(filename: str) -> str:
+            primary = sdk_root / "models" / filename
+            if primary.exists():
+                return str(primary)
+            cwd_candidate = pathlib.Path.cwd() / "models" / filename
+            if cwd_candidate.exists():
+                return str(cwd_candidate)
+            return str(primary)
+
+        force_encoder_path = resolve_force_model("sparsh_dino_base_encoder.ckpt")
+        force_decoder_path = resolve_force_model("sparsh_digit_forcefield_decoder.pth")
         
         # Initialize camera
         self.camera = Camera(serial=serial, sensors_root=sensors_root, thread=True)

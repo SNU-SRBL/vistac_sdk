@@ -175,5 +175,10 @@ sensors/D21119/calibration
 models/*.ckpt
 models/*.pth
 
+# ROS2
+build/
+install/
+log/
+
 # Reference
 sparsh-main/

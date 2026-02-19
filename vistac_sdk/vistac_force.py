@@ -50,7 +50,12 @@ def _ensure_sparsh_path() -> str:
     import sys
 
     sdk_root = pathlib.Path(__file__).resolve().parents[1]
-    sparsh_root = str(sdk_root / 'sparsh-main')
+    sparsh_root_path = sdk_root / 'sparsh-main'
+    if not sparsh_root_path.exists():
+        cwd_candidate = pathlib.Path.cwd() / 'sparsh-main'
+        if cwd_candidate.exists():
+            sparsh_root_path = cwd_candidate
+    sparsh_root = str(sparsh_root_path)
     if sparsh_root not in sys.path:
         sys.path.insert(0, sparsh_root)
     return sparsh_root

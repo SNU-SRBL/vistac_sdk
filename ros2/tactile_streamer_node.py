@@ -2,6 +2,8 @@
 
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
+from rcl_interfaces.msg import ParameterDescriptor, ParameterType
 from sensor_msgs.msg import Image, PointCloud2, PointField
 from geometry_msgs.msg import WrenchStamped
 from std_msgs.msg import Header
@@ -49,7 +51,11 @@ class TactileStreamerNode(Node):
         self.declare_parameter('model_device', 'cuda')
         self.declare_parameter('enable_force', False)
         self.declare_parameter('temporal_stride', 5)
-        self.declare_parameter('outputs', [])
+        self.declare_parameter(
+            'outputs',
+            value=[''],
+            descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_STRING_ARRAY)
+        )
         self.declare_parameter('use_mask', True)
         self.declare_parameter('refine_mask', True)
         self.declare_parameter('relative', True)
@@ -77,7 +83,7 @@ class TactileStreamerNode(Node):
         model_device = self.get_parameter('model_device').get_parameter_value().string_value
         enable_force = self.get_parameter('enable_force').get_parameter_value().bool_value
         temporal_stride = self.get_parameter('temporal_stride').get_parameter_value().integer_value
-        outputs_param = self.get_parameter('outputs').get_parameter_value().string_array_value
+        outputs_param = [s for s in self.get_parameter('outputs').get_parameter_value().string_array_value if s]
         use_mask = self.get_parameter('use_mask').get_parameter_value().bool_value
         refine_mask = self.get_parameter('refine_mask').get_parameter_value().bool_value
         relative = self.get_parameter('relative').get_parameter_value().bool_value
@@ -160,39 +166,39 @@ class TactileStreamerNode(Node):
         self.bridge = CvBridge()
         
         # Create publishers based on outputs
-        self.publishers = {}
+        self.output_publishers = {}
         
         # For backward compatibility, create legacy mode-based publisher
         if mode == 'pointcloud':
             self.publisher = self.create_publisher(PointCloud2, topic, 10)
-            self.publishers['pointcloud'] = self.publisher
+            self.output_publishers['pointcloud'] = self.publisher
         elif mode in ['depth', 'gradient']:
             self.publisher = self.create_publisher(Image, topic, 10)
-            self.publishers[mode] = self.publisher
+            self.output_publishers[mode] = self.publisher
         elif mode == 'force_field':
             self.publisher = self.create_publisher(Image, topic, 10)
-            self.publishers['force_field'] = self.publisher
+            self.output_publishers['force_field'] = self.publisher
         elif mode == 'force_vector':
             self.publisher = self.create_publisher(WrenchStamped, topic, 10)
-            self.publishers['force_vector'] = self.publisher
+            self.output_publishers['force_vector'] = self.publisher
         else:
             self.publisher = self.create_publisher(Image, topic, 10)
-            self.publishers['depth'] = self.publisher
+            self.output_publishers['depth'] = self.publisher
         
         # Create additional publishers for multi-output mode
         base_topic = f"tactile/{serial}"
         for output in outputs:
-            if output not in self.publishers:
+            if output not in self.output_publishers:
                 if output == 'depth':
-                    self.publishers['depth'] = self.create_publisher(Image, f"{base_topic}/depth", 10)
+                    self.output_publishers['depth'] = self.create_publisher(Image, f"{base_topic}/depth", 10)
                 elif output == 'gradient':
-                    self.publishers['gradient'] = self.create_publisher(Image, f"{base_topic}/gradient", 10)
+                    self.output_publishers['gradient'] = self.create_publisher(Image, f"{base_topic}/gradient", 10)
                 elif output == 'pointcloud':
-                    self.publishers['pointcloud'] = self.create_publisher(PointCloud2, f"{base_topic}/pointcloud", 10)
+                    self.output_publishers['pointcloud'] = self.create_publisher(PointCloud2, f"{base_topic}/pointcloud", 10)
                 elif output == 'force_field':
-                    self.publishers['force_field'] = self.create_publisher(Image, f"{base_topic}/force_field", 10)
+                    self.output_publishers['force_field'] = self.create_publisher(Image, f"{base_topic}/force_field", 10)
                 elif output == 'force_vector':
-                    self.publishers['force_vector'] = self.create_publisher(WrenchStamped, f"{base_topic}/force_vector", 10)
+                    self.output_publishers['force_vector'] = self.create_publisher(WrenchStamped, f"{base_topic}/force_vector", 10)
             
         self.timer = self.create_timer(1.0 / rate, self.timer_callback)
 
@@ -210,10 +216,10 @@ class TactileStreamerNode(Node):
             if result is None:
                 continue  # Skip None results (e.g., force during warmup)
             
-            if output_name not in self.publishers:
+            if output_name not in self.output_publishers:
                 continue  # Skip outputs without publishers
             
-            publisher = self.publishers[output_name]
+            publisher = self.output_publishers[output_name]
             
             if output_name == 'pointcloud':
                 # Handle pointcloud output

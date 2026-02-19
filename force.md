@@ -71,7 +71,7 @@ Allowed `Status` values: `OPEN`, `IN_PROGRESS`, `BLOCKED`, `DONE`.
 - ID: `B1`
 - Title: `CPU fallback with xformers present`
 - Priority: `P0`
-- Status: `OPEN`
+- Status: `BLOCKED`
 - DependsOn: `NONE`
 - Goal: avoid CPU failures when xformers FMHA is unavailable on CPU.
 - DoneWhen:
@@ -94,7 +94,7 @@ Allowed `Status` values: `OPEN`, `IN_PROGRESS`, `BLOCKED`, `DONE`.
 - ID: `B3`
 - Title: `ROS2 end-to-end validation`
 - Priority: `P0`
-- Status: `OPEN`
+- Status: `BLOCKED`
 - DependsOn: `B1`
 - Goal: validate runtime behavior beyond import checks.
 - RequiredScope:
@@ -194,6 +194,132 @@ NextStep: B?
 - Summary:
   - Focused validation confirmed for parity + visualization subsets.
   - Remaining work is represented by open checklist items B1–B5.
+
+### D1. B1 scope reevaluation started (2026-02-19)
+
+- EntryID: `D1`
+- DateTimeUTC: `2026-02-19T01:42:49Z`
+- StepID: `B1`
+- StepStatus: `IN_PROGRESS`
+- Result: `PARTIAL`
+- Summary:
+  - User confirmed GPU-only deployment constraint.
+  - B1 implementation scope reevaluation initiated to avoid unnecessary CPU-path work.
+- CommandsRun:
+  - `date -u +"%Y-%m-%dT%H:%M:%SZ"`
+- ValidationOutput:
+  - `2026-02-19T01:42:49Z`
+- FilesChanged:
+  - `force.md`
+- BlockerReason: ``
+- NextStep: `B1`
+
+### D2. B1 blocked by deployment policy (2026-02-19)
+
+- EntryID: `D2`
+- DateTimeUTC: `2026-02-19T01:43:07Z`
+- StepID: `B1`
+- StepStatus: `BLOCKED`
+- Result: `BLOCKED`
+- Summary:
+  - B1 CPU fallback implementation is intentionally out of scope.
+  - Deployment target is GPU-present systems only, per user direction.
+- CommandsRun:
+  - `date -u +"%Y-%m-%dT%H:%M:%SZ"`
+- ValidationOutput:
+  - `2026-02-19T01:43:07Z`
+- FilesChanged:
+  - `force.md`
+- BlockerReason: `CPU compatibility work is excluded by GPU-only deployment policy.`
+- NextStep: `B3`
+
+### D3. B3 validation run (single-device environment) (2026-02-19)
+
+- EntryID: `D3`
+- DateTimeUTC: `2026-02-19T02:01:15Z`
+- StepID: `B3`
+- StepStatus: `IN_PROGRESS`
+- Result: `PARTIAL`
+- Summary:
+  - Executed ROS2 runtime validation with one connected sensor (`D21242`).
+  - Verified single-sensor force topics and message types.
+  - Verified multi-sensor launch behavior where unavailable sensors exit gracefully.
+- CommandsRun:
+  - `source /opt/ros/humble/setup.bash && colcon build --packages-select vistac_sdk`
+  - `source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 run vistac_sdk tactile_streamer_node --ros-args -p serial:=D21242 -p sensors_root:=$PWD/sensors -p enable_force:=true -p model_device:=cuda -p outputs:="[force_field,force_vector]" -p rate:=10.0`
+  - `source /opt/ros/humble/setup.bash && source install/setup.bash && nohup ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py sensors_root:=$PWD/sensors enable_force:=true outputs:=force_vector rate:=8.0 </dev/null >/tmp/b3_multi.log 2>&1 & pid=$!; sleep 18; ros2 topic list | grep -E '^/tactile/(D21119|D21242|D21273|D21275)/force_vector$' | sort; timeout 10s ros2 topic echo --once /tactile/D21242/force_vector; kill $pid; wait $pid`
+  - `source /opt/ros/humble/setup.bash && source install/setup.bash && timeout 12s ros2 topic echo --once /tactile/D21242/force_field`
+- ValidationOutput:
+  - `/tactile/D21242/force_field` present; type `sensor_msgs/msg/Image`
+  - `/tactile/D21242/force_vector` present; type `geometry_msgs/msg/WrenchStamped`
+  - `ros2 topic echo --once /tactile/D21242/force_vector` produced non-zero force sample.
+  - Multi-launch started four nodes; three sensors (`D21119`,`D21273`,`D21275`) logged "not detected" and exited cleanly; `D21242` stream remained active.
+- FilesChanged:
+  - `ros2/tactile_streamer_node.py`
+  - `vistac_sdk/live_core.py`
+  - `vistac_sdk/vistac_force.py`
+- ScopeChecks:
+  - item: `single-sensor launch`
+    status: `PASS`
+    note: `D21242 node initialized and produced force topics/messages.`
+  - item: `multi-sensor launch`
+    status: `PASS`
+    note: `Launch orchestration works; non-connected sensors exit gracefully; connected sensor remains active.`
+  - item: `force field topic stream`
+    status: `PASS`
+    note: `Topic and message type observed for D21242.`
+  - item: `force vector topic stream`
+    status: `PASS`
+    note: `Topic and message payload observed for D21242.`
+  - item: `pointcloud_force mode behavior`
+    status: `BLOCKED`
+    note: `Clean, repeatable topic introspection blocked by stale-process interference and ROS transport instability during this session.`
+  - item: `sustained streaming consistency`
+    status: `BLOCKED`
+    note: `Reliable `ros2 topic hz` sampling was not repeatable under current DDS SHM transport errors.`
+- BlockerReason: ``
+- NextStep: `B3`
+
+### D4. B3 blocked pending full hardware + stable DDS transport (2026-02-19)
+
+- EntryID: `D4`
+- DateTimeUTC: `2026-02-19T02:01:45Z`
+- StepID: `B3`
+- StepStatus: `BLOCKED`
+- Result: `BLOCKED`
+- Summary:
+  - B3 was executed as far as possible in a single-device setup and produced partial PASS coverage.
+  - Full B3 completion is blocked by unavailable additional sensors and unstable DDS SHM transport behavior affecting repeatable long-run checks.
+- CommandsRun:
+  - `source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 topic list | grep -E '^/tactile/' | sort`
+  - `source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 topic echo --once /tactile/D21242/force_vector`
+  - `source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 topic echo --once /tactile/D21242/force_field`
+- ValidationOutput:
+  - Confirmed active D21242 force topic traffic.
+  - Could not complete reproducible `pointcloud_force` behavior verification and sustained stream-rate measurement under current environment constraints.
+- FilesChanged:
+  - `force.md`
+- ScopeChecks:
+  - item: `single-sensor launch`
+    status: `PASS`
+    note: `Validated on connected sensor D21242.`
+  - item: `multi-sensor launch`
+    status: `PASS`
+    note: `Launch path validated; non-connected sensors exited gracefully.`
+  - item: `force field topic stream`
+    status: `PASS`
+    note: `Observed with D21242.`
+  - item: `force vector topic stream`
+    status: `PASS`
+    note: `Observed with D21242.`
+  - item: `pointcloud_force mode behavior`
+    status: `BLOCKED`
+    note: `Needs stable clean-run introspection and/or additional instrumentation.`
+  - item: `sustained streaming consistency`
+    status: `BLOCKED`
+    note: `Needs stable DDS transport and longer uninterrupted run checks.`
+- BlockerReason: `Only D21242 is connected; additional-sensor E2E scope and stable long-run DDS validation are currently not reproducible.`
+- NextStep: `B2`
 
 ---
 
