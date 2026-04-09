@@ -112,7 +112,7 @@ Allowed `Status` values: `OPEN`, `IN_PROGRESS`, `BLOCKED`, `DONE`.
 - ID: `B4`
 - Title: `CI gating policy`
 - Priority: `P1`
-- Status: `OPEN`
+- Status: `DONE`
 - DependsOn: `B2`
 - Goal: enforce CPU/GPU expectations in CI.
 - DoneWhen:
@@ -123,7 +123,7 @@ Allowed `Status` values: `OPEN`, `IN_PROGRESS`, `BLOCKED`, `DONE`.
 - ID: `B5`
 - Title: `Dependency metadata alignment`
 - Priority: `P1`
-- Status: `OPEN`
+- Status: `DONE`
 - DependsOn: `B2`
 - Goal: align runtime/install docs for force stack.
 - DoneWhen:
@@ -468,6 +468,122 @@ NextStep: B?
     note: `RViz Fixed Frame set to tactile_D21242.`
 - BlockerReason: ``
 - NextStep: `B4`
+
+### D10. B4 CI policy implementation started (2026-04-09)
+
+- EntryID: `D10`
+- DateTimeUTC: `2026-04-09T10:50:13Z`
+- StepID: `B4`
+- StepStatus: `IN_PROGRESS`
+- Result: `PARTIAL`
+- Summary:
+  - Started implementation of repository CI gating policy.
+  - Plan is to add explicit CPU-safe and GPU-required CI jobs plus parity anti-silent-skip enforcement.
+- CommandsRun:
+  - `date -u +"%Y-%m-%dT%H:%M:%SZ"`
+- ValidationOutput:
+  - `2026-04-09T10:50:13Z`
+- FilesChanged:
+  - `force.md`
+- BlockerReason: ``
+- NextStep: `B4`
+
+### D11. B4 CI gating policy implemented (2026-04-09)
+
+- EntryID: `D11`
+- DateTimeUTC: `2026-04-09T10:53:03Z`
+- StepID: `B4`
+- StepStatus: `DONE`
+- Result: `PASS`
+- Summary:
+  - Added GitHub Actions CI workflow with explicit gating categories:
+    - `cpu-safe-tests` (required test gate),
+    - `parity-guard` (fails if parity test is skipped without explicit override),
+    - `gpu-required-tests` (explicit GPU gate with deterministic blocked/fail policy).
+  - Parity test skip is now non-silent by default (`ALLOW_PARITY_SKIP=0`), and requires explicit override to permit skip.
+- CommandsRun:
+  - `python3 -c "import yaml, pathlib; yaml.safe_load(pathlib.Path('.github/workflows/ci.yml').read_text()); print('CI_YAML_PARSE_OK')"`
+  - `date -u +"%Y-%m-%dT%H:%M:%SZ"`
+- ValidationOutput:
+  - `CI_YAML_PARSE_OK`
+  - `2026-04-09T10:53:03Z`
+- FilesChanged:
+  - `.github/workflows/ci.yml`
+  - `force.md`
+- BlockerReason: ``
+- NextStep: `B5`
+
+### D12. B5 dependency alignment started (2026-04-09)
+
+- EntryID: `D12`
+- DateTimeUTC: `2026-04-09T10:54:10Z`
+- StepID: `B5`
+- StepStatus: `IN_PROGRESS`
+- Result: `PARTIAL`
+- Summary:
+  - Identified dependency intent mismatch: `setup.py` omitted several Sparsh-related packages present in `requirements.txt`.
+  - Started reconciling install metadata and user-facing documentation for optional GPU acceleration dependencies.
+- CommandsRun:
+  - `date -u +"%Y-%m-%dT%H:%M:%SZ"`
+  - `read_file requirements.txt`
+  - `read_file setup.py`
+  - `grep README.md for installation/GPU dependency guidance`
+- ValidationOutput:
+  - `Timestamp captured: 2026-04-09T10:54:10Z`
+  - `Mismatch found: omegaconf/lightning/rich present in requirements.txt but missing from setup.py`
+- FilesChanged:
+  - `force.md`
+- BlockerReason: ``
+- NextStep: `B5`
+
+### D13. B5 dependency metadata aligned and documented (2026-04-09)
+
+- EntryID: `D13`
+- DateTimeUTC: `2026-04-09T10:56:40Z`
+- StepID: `B5`
+- StepStatus: `DONE`
+- Result: `PASS`
+- Summary:
+  - Reconciled force-stack dependency intent between `requirements.txt` and `setup.py` by adding missing Sparsh-related dependencies to package metadata.
+  - Added explicit optional GPU acceleration dependency path via `extras_require['gpu']` and documented install command in README.
+  - Confirmed dependency counts and required package presence are aligned.
+- CommandsRun:
+  - `python3 alignment check script (setup.py install_requires vs requirements.txt)`
+  - `date -u +"%Y-%m-%dT%H:%M:%SZ"`
+- ValidationOutput:
+  - `SETUP_INSTALL_COUNT 19`
+  - `REQ_TXT_COUNT 19`
+  - `HAS_IN_SETUP omegaconf>=2.3 True`
+  - `HAS_IN_SETUP lightning>=2.0 True`
+  - `HAS_IN_SETUP rich>=13.0 True`
+  - `GPU_EXTRA ['xformers>=0.0.22']`
+  - `2026-04-09T10:56:40Z`
+- FilesChanged:
+  - `setup.py`
+  - `README.md`
+  - `force.md`
+- BlockerReason: ``
+- NextStep: `NONE`
+
+### D14. Final closure under accepted GPU-only scope (2026-04-09)
+
+- EntryID: `D14`
+- DateTimeUTC: `2026-04-09T10:59:02Z`
+- StepID: `FINAL`
+- StepStatus: `DONE`
+- Result: `PASS`
+- Summary:
+  - User accepted project completion under GPU-only deployment scope.
+  - Remaining `BLOCKED` items (`B1`, `B2`) are intentional policy outcomes and not active implementation defects.
+  - Force stack implementation, ROS2 validation, CI gating policy, and dependency alignment are complete for accepted scope.
+- CommandsRun:
+  - `date -u +"%Y-%m-%dT%H:%M:%SZ"`
+- ValidationOutput:
+  - `2026-04-09T10:59:02Z`
+- FilesChanged:
+  - `force.md`
+- BlockerReason: ``
+- NextStep: `NONE`
 
 ---
 

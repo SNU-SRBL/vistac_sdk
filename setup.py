@@ -25,7 +25,16 @@ setup(
         "einops>=0.6",
         "timm>=0.9",
         "huggingface_hub>=0.19",
+        "omegaconf>=2.3",
+        "lightning>=2.0",
+        "rich>=13.0",
     ],
+    extras_require={
+        # Optional CUDA acceleration for Sparsh attention kernels
+        "gpu": [
+            "xformers>=0.0.22",
+        ],
+    },
     python_requires=">=3.9",
     entry_points={
         "console_scripts": [

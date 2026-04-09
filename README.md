@@ -25,6 +25,13 @@ To enable force estimation capabilities using [Sparsh](https://github.com/facebo
 python scripts/download_models.py
 ```
 
+Optional GPU acceleration dependency (recommended on CUDA systems):
+```bash
+pip install -e .[gpu]
+```
+
+If `xformers` wheel resolution fails on your platform, continue without it. The force stack still runs, but with reduced performance.
+
 This will download:
 - **Encoder**: `sparsh-dino-base` (ViT-base, ~1.7 GB)
 - **Decoder**: `sparsh-digit-forcefield` (~15 MB)
@@ -33,7 +40,8 @@ Models are saved to `models/` directory.
 
 **Requirements**:
 - GPU recommended (CUDA-capable) for real-time performance (~50-80ms)
-- CPU fallback available (slower, ~500-1000ms per frame)
+- Depth pipeline supports CPU execution.
+- Force pipeline is intended for GPU execution in this project scope.
 
 **Note**: Force estimation is disabled by default and requires explicit activation.
 
@@ -131,7 +139,7 @@ frame, result = processor.get_latest_output()
 #### Combined Mode with Selective Outputs
 ```python
 from vistac_sdk import TactileProcessor
-import cv2
+import numpy as np
 
 processor = TactileProcessor(
     model_path="sensors/D21273/model/nnmodel.pth",
@@ -139,8 +147,8 @@ processor = TactileProcessor(
     enable_force=True
 )
 
-# Load background
-bg_image = cv2.imread("sensors/D21273/calibration/background_data.npz")
+# Load background (BGR uint8 no-contact frame)
+bg_image = np.zeros((240, 320, 3), dtype=np.uint8)
 processor.load_background(bg_image)
 
 # Selective computation (only depth this frame)
@@ -179,7 +187,12 @@ ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py \
 - `/tactile/{serial}/gradient` - `sensor_msgs/Image` (32FC2)
 - `/tactile/{serial}/pointcloud` - `sensor_msgs/PointCloud2`
 - `/tactile/{serial}/force_field` - `sensor_msgs/Image` (32FC3, RGB=Fx,Fy,Fz)  # channels: R=fx, G=fy, B=fz
+- `/tactile/{serial}/force_field_viz` - `sensor_msgs/Image` (rgb8, RViz-friendly force visualization)
 - `/tactile/{serial}/force_vector` - `geometry_msgs/WrenchStamped`
+
+**RViz notes**:
+- Set Fixed Frame to `tactile_{serial}` (e.g., `tactile_D21242`).
+- Use `/tactile/{serial}/force_field_viz` for image display in RViz. (`32FC3` is not directly supported by RViz Image display.)
 
 ## Architecture
 
@@ -199,7 +212,7 @@ ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py \
 ### Selective Execution
 Only requested outputs are computed per frame, enabling efficient performance:
 - Depth-only: ~1-2ms
-- Force-only: ~50-80ms (GPU) or ~500-1000ms (CPU)
+- Force-only: ~50-80ms (GPU)
 - Combined: ~50-80ms (GPU, force dominates)
 
 ### Output Formats

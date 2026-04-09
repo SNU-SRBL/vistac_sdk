@@ -8,6 +8,7 @@ from sensor_msgs.msg import Image, PointCloud2, PointField
 from geometry_msgs.msg import WrenchStamped
 from std_msgs.msg import Header
 from cv_bridge import CvBridge
+import cv2
 import numpy as np
 import struct
 
@@ -276,55 +277,6 @@ class TactileStreamerNode(Node):
                                                 fx_flat = fx_flat[mask_flat]
                                                 fy_flat = fy_flat[mask_flat]
                                                 fz_flat = fz_flat[mask_flat]
-                                    forces = np.stack([fx_flat, fy_flat, fz_flat], axis=1).astype(np.float32)
-                            except Exception:
-                                pass
-
-                # Fallback: derive colors/forces directly from force_field if requested
-                # and helper arrays were not precomputed upstream.
-                if self.pointcloud_color == 'force' and colors is None:
-                    ff = result_dict.get('force_field')
-                    if isinstance(ff, dict):
-                        normal = ff.get('normal')
-                        shear = ff.get('shear')
-                        if normal is not None and shear is not None:
-                            try:
-                                normal_arr = np.asarray(normal, dtype=np.float32)
-                                shear_arr = np.asarray(shear, dtype=np.float32)
-                                force_rgb = force_field_to_rgb(normal_arr, shear_arr)
-
-                                th, tw = frame.shape[0], frame.shape[1]
-                                fh, fw = force_rgb.shape[:2]
-                                if (fh, fw) != (th, tw):
-                                    force_rgb = cv2.resize(force_rgb, (tw, th), interpolation=cv2.INTER_NEAREST)
-
-                                colors_flat = force_rgb.reshape(-1, 3) / 255.0
-
-                                mask = result_dict.get('mask')
-                                if mask is not None and pc.shape[0] != (th * tw):
-                                    mask_flat = mask.ravel()
-                                    if mask_flat.shape[0] == th * tw:
-                                        colors_flat = colors_flat[mask_flat]
-
-                                colors = colors_flat.astype(np.float32)
-
-                                if self.publish_force_fields and forces is None:
-                                    fx_img = shear_arr[..., 0]
-                                    fy_img = shear_arr[..., 1]
-                                    fz_img = normal_arr
-                                    if (fx_img.shape[0], fx_img.shape[1]) != (th, tw):
-                                        fx_img = cv2.resize(fx_img, (tw, th), interpolation=cv2.INTER_NEAREST)
-                                        fy_img = cv2.resize(fy_img, (tw, th), interpolation=cv2.INTER_NEAREST)
-                                        fz_img = cv2.resize(fz_img, (tw, th), interpolation=cv2.INTER_NEAREST)
-                                    fx_flat = fx_img.reshape(-1)
-                                    fy_flat = fy_img.reshape(-1)
-                                    fz_flat = fz_img.reshape(-1)
-                                    if mask is not None and pc.shape[0] != (th * tw):
-                                        mask_flat = mask.ravel()
-                                        if mask_flat.shape[0] == th * tw:
-                                            fx_flat = fx_flat[mask_flat]
-                                            fy_flat = fy_flat[mask_flat]
-                                            fz_flat = fz_flat[mask_flat]
                                     forces = np.stack([fx_flat, fy_flat, fz_flat], axis=1).astype(np.float32)
                             except Exception:
                                 pass
