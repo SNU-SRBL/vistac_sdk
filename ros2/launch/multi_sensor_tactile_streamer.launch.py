@@ -1,3 +1,5 @@
+import os
+
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
@@ -124,11 +126,15 @@ def launch_setup(context, *args, **kwargs):
     
     return nodes
 def generate_launch_description():
+    default_sensors_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), '..', '..', 'sensors')
+    )
+
     return LaunchDescription([
         # Declare launch arguments with defaults
         DeclareLaunchArgument(
             'sensors_root',
-            default_value='/home/bhsong/ros2/gaussianfeels/src/gaussianfeels_robot/tactile_sensor/vistac_sdk/sensors',
+            default_value=default_sensors_root,
             description='Root directory for sensor configurations'
         ),
         DeclareLaunchArgument(
