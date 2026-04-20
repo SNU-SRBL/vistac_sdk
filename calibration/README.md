@@ -4,7 +4,7 @@ Refer to the original [gs-sdk/calibration](https://github.com/joehjhuang/gs_sdk/
 ### Preperation
 For a sensor with {serial} number, you need a {serial}.yaml inside sensors/{serial}/{serial}.yaml
 
-#### (Optional) Adding Diffuser to LED
+#### (Optional) Adding diffuser to LED
 Due to varience of the acrylic window's side surface roughness, sharpness of the LED's are different. For sensors that have too much sharpness, applying Scotch Magic Tape to the side will smooth the light.
 
 <img src="../assets/magic_tape.jpg" width="150"/>
@@ -17,7 +17,7 @@ DO NOT PRESS THE SENSOR WITH THE TIP OF THE CALIPER. It will tear the gel. Press
 <img src="../assets/caliper.jpg" width="150"/>
 
 ```bash
-mm_to_ppmm.py --serial SERIAL --distance_mm DISTANCE_MM [--frames N] [--sensors_root SENSORS_ROOT]
+python mm_to_ppmm.py --serial SERIAL --distance_mm DISTANCE_MM [--frames N] [--sensors_root SENSORS_ROOT]
 ```
 
 ### Calibration Data Collection
@@ -27,7 +27,7 @@ mm_to_ppmm.py --serial SERIAL --distance_mm DISTANCE_MM [--frames N] [--sensors_
 
 To collect calibration data, use a ball indenter of known diameter to press against the sensor. Examples of the setup and resulting images are shown above.
 ```bash
-collect_data.py --serial SERIAL --ball_diameter DIAMETER [--sensors_root SENSORS_ROOT]
+python collect_data.py --serial SERIAL --ball_diameter DIAMETER [--sensors_root SENSORS_ROOT]
 ```
 * Instruction:
   * Save background image: Press 'b'

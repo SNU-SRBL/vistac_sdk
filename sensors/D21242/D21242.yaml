@@ -3,7 +3,7 @@ device_type: "DIGIT"
 # Device Serial Number
 device_serial: "D21242"
 # Pixel Per Millimeter
-ppmm: 18.842
+ppmm: 18.633
 # Desired Image Width and Height
 imgh: 320
 imgw: 240

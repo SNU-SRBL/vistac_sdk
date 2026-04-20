@@ -1,10 +1,19 @@
 import argparse
 import os
+import sys
 import cv2
 import numpy as np
 import open3d as o3d
 import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
+
+# Ensure local workspace package is imported when running as a script:
+#   python3 apps/live_viewer.py
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT in sys.path:
+    sys.path.remove(PROJECT_ROOT)
+sys.path.insert(0, PROJECT_ROOT)
+
 from vistac_sdk.live_core import LiveTactileProcessor
 from vistac_sdk.viz_utils import visualize_force_field, visualize_force_vector
 

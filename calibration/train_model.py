@@ -37,7 +37,7 @@ Arguments:
 
 DEFAULT_SENSORS_ROOT = os.path.join(os.path.dirname(__file__), "../sensors")
 
-def add_noise_to_bgrxy(bgrxys, noise_std=0.01):
+def add_noise_to_bgrxy(bgrxys, noise_std=0.02):
     """Add Gaussian noise to BGR features only (not XY) for robustness during training"""
     noise = torch.randn_like(bgrxys) * noise_std
     # Only apply noise to BGR channels (first 3 dimensions), not XY coordinates
@@ -74,7 +74,7 @@ def train_model():
     parser.add_argument(
         "--noise_std",
         type=float,
-        default=0.1,
+        default=0.02,
         help="standard deviation of Gaussian noise added to BGRXY during training (0 to disable)",
     )
     args = parser.parse_args()
@@ -185,6 +185,8 @@ def train_model():
             torch.save(net.state_dict(), save_path)
 
     # Save the training curve
+    # Force a non-GUI backend to avoid Qt/xcb plugin crashes in headless runs.
+    plt.switch_backend("Agg")
     save_path = os.path.join(model_dir, "training_curve.png")
     plt.plot(np.arange(len(traj["train_maes"])), traj["train_maes"], color="blue")
     plt.plot(np.arange(len(traj["test_maes"])), traj["test_maes"], color="red")
