@@ -60,7 +60,7 @@ def train_model():
         help="root directory containing sensors/<serial>/",
     )
     parser.add_argument(
-        "-ne", "--n_epochs", type=int, default=200, help="number of training epochs"
+        "-ne", "--n_epochs", type=int, default=100, help="number of training epochs"
     )
     parser.add_argument("-lr", "--lr", type=float, default=0.002, help="learning rate")
     parser.add_argument(
