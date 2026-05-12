@@ -7,7 +7,6 @@ from rcl_interfaces.msg import ParameterDescriptor, ParameterType
 from sensor_msgs.msg import Image, PointCloud2, PointField
 from geometry_msgs.msg import WrenchStamped
 from std_msgs.msg import Header
-from cv_bridge import CvBridge
 import cv2
 import numpy as np
 import struct
@@ -165,8 +164,6 @@ class TactileStreamerNode(Node):
             self.get_logger().info(f"Tactile sensor {serial} not detected. Exiting gracefully.")
             raise SystemExit(0)  # Exit gracefully without error
 
-        self.bridge = CvBridge()
-        
         # Create publishers based on outputs
         self.output_publishers = {}
         
@@ -205,6 +202,27 @@ class TactileStreamerNode(Node):
                     self.output_publishers['force_vector'] = self.create_publisher(WrenchStamped, f"{base_topic}/force_vector", 10)
             
         self.timer = self.create_timer(1.0 / rate, self.timer_callback)
+
+    @staticmethod
+    def _cv2_to_imgmsg(arr: np.ndarray, encoding: str) -> Image:
+        """Convert numpy array to ROS Image message (cv_bridge replacement).
+
+        Supports encodings used by this node:
+        - mono8:  uint8, 1-channel
+        - 32FC2:  float32, 2-channel
+        - 32FC3:  float32, 3-channel
+        - rgb8:   uint8, 3-channel
+        """
+        msg = Image()
+        if arr.ndim == 2:
+            msg.height, msg.width = arr.shape
+        else:
+            msg.height, msg.width, _ = arr.shape
+        msg.encoding = encoding
+        msg.is_bigendian = False
+        msg.step = arr.strides[0] if arr.strides[0] > 0 else arr.shape[1] * arr.itemsize * (arr.shape[2] if arr.ndim == 3 else 1)
+        msg.data = np.ascontiguousarray(arr).tobytes()
+        return msg
 
     def timer_callback(self):
         frame, result_dict = self.processor.get_latest_output()
@@ -295,14 +313,14 @@ class TactileStreamerNode(Node):
             elif output_name == 'depth':
                 # Handle depth output (2D array, uint8)
                 if len(result.shape) == 2:
-                    msg = self.bridge.cv2_to_imgmsg(result, encoding='mono8')
+                    msg = self._cv2_to_imgmsg(result, encoding='mono8')
                     msg.header = header
                     publisher.publish(msg)
                     
             elif output_name == 'gradient':
                 # Handle gradient output (H, W, 2) - convert to 2-channel float32 image
                 if len(result.shape) == 3 and result.shape[2] == 2:
-                    msg = self.bridge.cv2_to_imgmsg(result.astype(np.float32), encoding='32FC2')
+                    msg = self._cv2_to_imgmsg(result.astype(np.float32), encoding='32FC2')
                     msg.header = header
                     publisher.publish(msg)
             
@@ -320,7 +338,7 @@ class TactileStreamerNode(Node):
                         force_rgb[:, :, 1] = shear[:, :, 1]  # Fy
                         force_rgb[:, :, 2] = normal         # Fz
 
-                        msg = self.bridge.cv2_to_imgmsg(force_rgb, encoding='32FC3')
+                        msg = self._cv2_to_imgmsg(force_rgb, encoding='32FC3')
                         msg.header = header
                         publisher.publish(msg)
 
@@ -328,7 +346,7 @@ class TactileStreamerNode(Node):
                         viz_publisher = self.output_publishers.get('force_field_viz')
                         if viz_publisher is not None:
                             force_rgb8 = force_field_to_rgb(normal, shear)
-                            viz_msg = self.bridge.cv2_to_imgmsg(force_rgb8, encoding='rgb8')
+                            viz_msg = self._cv2_to_imgmsg(force_rgb8, encoding='rgb8')
                             viz_msg.header = header
                             viz_publisher.publish(viz_msg)
             
