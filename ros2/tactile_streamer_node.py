@@ -164,44 +164,24 @@ class TactileStreamerNode(Node):
             self.get_logger().info(f"Tactile sensor {serial} not detected. Exiting gracefully.")
             raise SystemExit(0)  # Exit gracefully without error
 
-        # Create publishers based on outputs
+        # Create publishers based on requested outputs
         self.output_publishers = {}
-        
-        # For backward compatibility, create legacy mode-based publisher
-        if mode == 'pointcloud':
-            self.publisher = self.create_publisher(PointCloud2, topic, 10)
-            self.output_publishers['pointcloud'] = self.publisher
-        elif mode in ['depth', 'gradient']:
-            self.publisher = self.create_publisher(Image, topic, 10)
-            self.output_publishers[mode] = self.publisher
-        elif mode == 'force_field':
-            self.publisher = self.create_publisher(Image, topic, 10)
-            self.output_publishers['force_field'] = self.publisher
-        elif mode == 'force_vector':
-            self.publisher = self.create_publisher(WrenchStamped, topic, 10)
-            self.output_publishers['force_vector'] = self.publisher
-        else:
-            self.publisher = self.create_publisher(Image, topic, 10)
-            self.output_publishers['depth'] = self.publisher
-        
-        # Create additional publishers for multi-output mode
         base_topic = f"tactile/{serial}"
         for output in outputs:
-            if output not in self.output_publishers:
-                if output == 'depth':
-                    self.output_publishers['depth'] = self.create_publisher(Image, f"{base_topic}/depth", 10)
-                elif output == 'gradient':
-                    self.output_publishers['gradient'] = self.create_publisher(Image, f"{base_topic}/gradient", 10)
-                elif output == 'pointcloud':
-                    self.output_publishers['pointcloud'] = self.create_publisher(PointCloud2, f"{base_topic}/pointcloud", 10)
-                elif output == 'force_field':
-                    self.output_publishers['force_field'] = self.create_publisher(Image, f"{base_topic}/force_field", 10)
-                    # RViz Image display does not support 32FC3; publish an rgb8 visualization topic as well.
-                    self.output_publishers['force_field_viz'] = self.create_publisher(Image, f"{base_topic}/force_field_viz", 10)
-                elif output == 'force_vector':
-                    self.output_publishers['force_vector'] = self.create_publisher(WrenchStamped, f"{base_topic}/force_vector", 10)
-                elif output == 'raw':
-                    self.output_publishers['raw'] = self.create_publisher(Image, f"{base_topic}/raw", 10)
+            if output == 'depth':
+                self.output_publishers['depth'] = self.create_publisher(Image, f"{base_topic}/depth", 10)
+            elif output == 'gradient':
+                self.output_publishers['gradient'] = self.create_publisher(Image, f"{base_topic}/gradient", 10)
+            elif output == 'pointcloud':
+                self.output_publishers['pointcloud'] = self.create_publisher(PointCloud2, f"{base_topic}/pointcloud", 10)
+            elif output == 'force_field':
+                self.output_publishers['force_field'] = self.create_publisher(Image, f"{base_topic}/force_field", 10)
+                # RViz Image display does not support 32FC3; publish an rgb8 visualization topic as well.
+                self.output_publishers['force_field_viz'] = self.create_publisher(Image, f"{base_topic}/force_field_viz", 10)
+            elif output == 'force_vector':
+                self.output_publishers['force_vector'] = self.create_publisher(WrenchStamped, f"{base_topic}/force_vector", 10)
+            elif output == 'raw':
+                self.output_publishers['raw'] = self.create_publisher(Image, f"{base_topic}/raw", 10)
             
         self.timer = self.create_timer(1.0 / rate, self.timer_callback)
 
