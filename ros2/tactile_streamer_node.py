@@ -200,6 +200,8 @@ class TactileStreamerNode(Node):
                     self.output_publishers['force_field_viz'] = self.create_publisher(Image, f"{base_topic}/force_field_viz", 10)
                 elif output == 'force_vector':
                     self.output_publishers['force_vector'] = self.create_publisher(WrenchStamped, f"{base_topic}/force_vector", 10)
+                elif output == 'raw':
+                    self.output_publishers['raw'] = self.create_publisher(Image, f"{base_topic}/raw", 10)
             
         self.timer = self.create_timer(1.0 / rate, self.timer_callback)
 
@@ -366,6 +368,13 @@ class TactileStreamerNode(Node):
                     msg.wrench.torque.y = 0.0
                     msg.wrench.torque.z = 0.0
                     publisher.publish(msg)
+            
+            elif output_name == 'raw':
+                # Raw camera frame: BGR from SDK → rgb8 for ROS convention
+                rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
+                msg = self._cv2_to_imgmsg(rgb, encoding='rgb8')
+                msg.header = header
+                publisher.publish(msg)
 
     def create_pointcloud2_msg(self, points, header, colors=None, color_format='rgb_packed', forces=None):
         """Create a PointCloud2 message from numpy point array.

@@ -50,6 +50,8 @@ class LiveTactileProcessor:
     ):
         # Store user-configurable force_field scale (applied to `force_field` returned by get_latest_output)
         self.force_field_scale = float(force_field_scale)
+        # Store requested outputs (used by get_latest_output to inject 'raw' into result dict)
+        self._requested_outputs = outputs
         """Initialize LiveTactileProcessor.
         
         Args:
@@ -185,6 +187,7 @@ class LiveTactileProcessor:
                     - 'mask': [H, W] bool
                     - 'force_field': {'normal': [224, 224], 'shear': [224, 224, 2]} or None
                     - 'force_vector': {'fx': float, 'fy': float, 'fz': float} or None
+                    - 'raw': [H, W, 3] BGR uint8 (raw camera frame, if 'raw' in outputs)
         """
         # Get latest camera frame
         frame = self.camera.get_image()
@@ -276,6 +279,10 @@ class LiveTactileProcessor:
                     import warnings
                     warnings.warn('Failed to recompute pointcloud colors/forces after scaling')
 
+
+        # Inject raw camera frame into result dict if requested
+        if result is not None and self._requested_outputs and 'raw' in self._requested_outputs and frame is not None:
+            result['raw'] = frame.copy()
 
         return frame, result
 
