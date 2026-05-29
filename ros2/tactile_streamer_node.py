@@ -441,11 +441,13 @@ class TactileStreamerNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = TactileStreamerNode()
+    node = None
     try:
+        node = TactileStreamerNode()
         rclpy.spin(node)
     finally:
-        node.destroy_node()
+        if node is not None:
+            node.destroy_node()
         rclpy.shutdown()
 
 if __name__ == '__main__':
