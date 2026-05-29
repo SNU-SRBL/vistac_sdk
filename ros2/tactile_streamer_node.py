@@ -159,10 +159,10 @@ class TactileStreamerNode(Node):
                 color_dist_threshold=color_dist_threshold,
                 height_threshold=height_threshold
             )
-        except RuntimeError as e:
+        except (RuntimeError, TimeoutError) as e:
             self.get_logger().error(f"Failed to initialize sensor {serial}: {e}")
-            self.get_logger().info(f"Tactile sensor {serial} not detected. Exiting gracefully.")
-            raise SystemExit(0)  # Exit gracefully without error
+            self.get_logger().info(f"Tactile sensor {serial} not available. Exiting.")
+            raise SystemExit(0)
 
         # Create publishers based on requested outputs
         self.output_publishers = {}

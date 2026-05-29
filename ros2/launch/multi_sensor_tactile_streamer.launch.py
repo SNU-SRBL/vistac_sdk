@@ -126,9 +126,13 @@ def launch_setup(context, *args, **kwargs):
     
     return nodes
 def generate_launch_description():
-    default_sensors_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), '..', '..', 'sensors')
-    )
+    # Resolve sensors_root for both source and install trees.
+    _launch_dir = os.path.dirname(os.path.abspath(__file__))
+    # Source: .../src/robot/tactile_sensor/vistac_sdk/sensors
+    _src_path = os.path.abspath(os.path.join(_launch_dir, '..', '..', 'sensors'))
+    # Install: .../install/vistac_sdk/share/vistac_sdk/sensors
+    _inst_path = os.path.abspath(os.path.join(_launch_dir, '..', 'sensors'))
+    default_sensors_root = _src_path if os.path.exists(_src_path) else _inst_path
 
     return LaunchDescription([
         # Declare launch arguments with defaults

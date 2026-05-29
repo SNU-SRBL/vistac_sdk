@@ -161,12 +161,34 @@ class Camera:
         self.process = subprocess.Popen(
             self.ffmpeg_command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
         )
-        # Warm-up phase: discard the first few frames
+        # Warm-up phase: discard the first few frames with a timeout to
+        # prevent indefinite hang if ffmpeg can't access the device.
         if verbose:
             print("Warming up the camera...")
         warm_up_frames = 100
-        for _ in range(warm_up_frames):
-            self.process.stdout.read(self.raw_size)
+        deadline = time.time() + 15.0  # 15s timeout for camera warm-up
+        try:
+            for _ in range(warm_up_frames):
+                if time.time() > deadline:
+                    raise TimeoutError(
+                        f"Camera {getattr(self, 'serial', 'unknown')} warm-up "
+                        f"timed out after 15s."
+                    )
+                # Check if ffmpeg exited early
+                if self.process.poll() is not None:
+                    raise RuntimeError(
+                        f"Camera {getattr(self, 'serial', 'unknown')} ffmpeg "
+                        f"exited with code {self.process.returncode} during warm-up."
+                    )
+                self.process.stdout.read(self.raw_size)
+        except (RuntimeError, TimeoutError):
+            # Always kill ffmpeg on any failure during warm-up
+            try:
+                self.process.kill()
+                self.process.wait(timeout=2)
+            except Exception:
+                pass
+            raise
         if verbose:
             print("Camera ready for use!")
             
@@ -235,12 +257,23 @@ class Camera:
     def release(self):
         """
         Release the camera resource.
+        Kill ffmpeg before joining thread to unblock stuck reads.
         """
         self._running = False
-        if self._thread is not None:
-            self._thread.join()
-        self.process.stdout.close()
-        self.process.wait()
+        # Kill ffmpeg first — closes the stdout pipe, which unblocks
+        # any read() in the thread, allowing it to exit cleanly.
+        if hasattr(self, 'process') and self.process is not None:
+            try:
+                self.process.terminate()
+                self.process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=2)
+            except ProcessLookupError:
+                pass
+        # Now join thread with timeout.
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
 
 
 def get_camera_id(camera_name, verbose=True):
