@@ -68,6 +68,7 @@ def run_live_viewer(
     relative=False,
     relative_scale=0.5,
     mask_only_pointcloud=False,
+    point_sample_mm=0.0,
     color_dist_threshold=15,
     height_threshold=0.2,
     enable_force=False,
@@ -114,6 +115,7 @@ def run_live_viewer(
         relative=relative,
         relative_scale=relative_scale,
         mask_only_pointcloud=mask_only_pointcloud,
+        point_sample_mm=point_sample_mm,
         color_dist_threshold=color_dist_threshold,
         height_threshold=height_threshold
     )
@@ -461,6 +463,10 @@ if __name__ == "__main__":
         help="If set, use only masked area for point cloud"
     )
     parser.add_argument(
+        "--point_sample_mm", type=float, default=0.0,
+        help="Point spacing in mm for pointcloud subsampling (0=full res)"
+    )
+    parser.add_argument(
         "--device_type", type=str, choices=["cuda", "cpu"], default="cuda",
         help="Device type for model inference"
     )
@@ -503,6 +509,7 @@ if __name__ == "__main__":
         relative=args.relative,
         relative_scale=args.relative_scale,
         mask_only_pointcloud=args.mask_only_pointcloud,
+        point_sample_mm=args.point_sample_mm,
         color_dist_threshold=args.color_dist_threshold,
         height_threshold=args.height_threshold,
         enable_force=args.enable_force,

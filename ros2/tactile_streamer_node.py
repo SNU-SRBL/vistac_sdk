@@ -35,6 +35,7 @@ Complete Parameters List:
 - return_color: Whether to include color in pointcloud (default: False)
 - color_dist_threshold: Color distance threshold for contact mask (default: 15)
 - height_threshold: Height threshold for contact mask (default: 0.2)
+- point_sample_mm: Point spacing in mm for pointcloud subsampling (0.0 = no sampling)
 - topic: Topic to publish the data (default: 'tactile/depth')
 - rate: Publishing rate in Hz (default: 15.0)
 - verbose: Whether to print verbose camera info (default: True)
@@ -69,6 +70,7 @@ class TactileStreamerNode(Node):
         self.declare_parameter('force_mapping', 'nearest')  # nearest|bilinear
         self.declare_parameter('color_dist_threshold', 15)
         self.declare_parameter('height_threshold', 0.2)
+        self.declare_parameter('point_sample_mm', 0.0)
         # Make force_field options available to ROS users (applies SDK-wide)
         self.declare_parameter('force_field_scale', 1.0)
         self.declare_parameter('force_field_baseline', False)
@@ -97,6 +99,7 @@ class TactileStreamerNode(Node):
         force_mapping = self.get_parameter('force_mapping').get_parameter_value().string_value
         color_dist_threshold = self.get_parameter('color_dist_threshold').get_parameter_value().integer_value
         height_threshold = self.get_parameter('height_threshold').get_parameter_value().double_value
+        point_sample_mm = self.get_parameter('point_sample_mm').get_parameter_value().double_value
         # ROS-level force_field options (passed into LiveTactileProcessor)
         force_field_scale = float(self.get_parameter('force_field_scale').get_parameter_value().double_value)
         force_field_baseline = self.get_parameter('force_field_baseline').get_parameter_value().bool_value
@@ -156,6 +159,7 @@ class TactileStreamerNode(Node):
                 relative=relative,
                 relative_scale=relative_scale,
                 mask_only_pointcloud=mask_only_pointcloud,
+                point_sample_mm=point_sample_mm,
                 color_dist_threshold=color_dist_threshold,
                 height_threshold=height_threshold
             )

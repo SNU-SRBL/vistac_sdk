@@ -30,6 +30,7 @@ Launch Arguments:
 - publish_force_fields: If true, include per-point fx,fy,fz fields in PointCloud2 (default: false)
 - force_mapping: Mapping method from force image -> points (nearest|bilinear) (default: nearest)
 - height_threshold: Contact detection height threshold in mm (default: 0.2)
+- point_sample_mm: Point spacing in mm for pointcloud subsampling (0.0 = no sampling) (default: 0.0)
 
 Usage Examples:
 ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py mode:=depth
@@ -66,6 +67,7 @@ def launch_setup(context, *args, **kwargs):
     height_threshold = float(LaunchConfiguration('height_threshold').perform(context))
     force_field_scale = float(LaunchConfiguration('force_field_scale').perform(context))
     force_field_baseline = LaunchConfiguration('force_field_baseline').perform(context) == 'true'
+    point_sample_mm = float(LaunchConfiguration('point_sample_mm').perform(context))
     
     # Auto-discover sensors from sensors_root directory
     sensors = []
@@ -110,6 +112,7 @@ def launch_setup(context, *args, **kwargs):
             "force_mapping": force_mapping,
             "force_field_scale": force_field_scale,
             "force_field_baseline": force_field_baseline,
+            "point_sample_mm": point_sample_mm,
         }
         # Do not pass empty array params; ROS2 launch cannot infer type from [] and rejects with tuple () error.
         if outputs:
@@ -236,6 +239,11 @@ def generate_launch_description():
             'force_field_baseline',
             default_value='false',
             description='Enable runtime per-pixel baseline subtraction for force_field'
+        ),
+        DeclareLaunchArgument(
+            'point_sample_mm',
+            default_value='0.0',
+            description='Point spacing in mm for pointcloud subsampling (0.0 = no sampling)'
         ),
         
         # Use OpaqueFunction to handle dynamic node creation

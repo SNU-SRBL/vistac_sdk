@@ -45,6 +45,7 @@ class LiveTactileProcessor:
         relative=True,
         relative_scale=0.5,
         mask_only_pointcloud: bool = False,
+        point_sample_mm: float = 0.0,
         color_dist_threshold=15,
         height_threshold=0.2,
     ):
@@ -75,6 +76,8 @@ class LiveTactileProcessor:
             relative: Use relative depth estimation
             relative_scale: Scale factor for relative depth
             mask_only_pointcloud: Only return masked points in point cloud
+            point_sample_mm: Point spacing in mm for pointcloud subsampling
+                             (0.0 = no subsampling, full resolution)
             color_dist_threshold: Color distance threshold for masking
             height_threshold: Height threshold for masking
         """
@@ -89,6 +92,7 @@ class LiveTactileProcessor:
             'relative': relative,
             'relative_scale': relative_scale,
             'mask_only_pointcloud': mask_only_pointcloud,
+            'point_sample_mm': point_sample_mm,
             'color_dist_threshold': color_dist_threshold,
             'height_threshold': height_threshold,
         }

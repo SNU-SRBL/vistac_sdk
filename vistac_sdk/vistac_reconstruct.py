@@ -200,9 +200,37 @@ class DepthEstimator:
 
         return depth_map
     
+    def _get_point_sample_stride(self, ppmm, point_sample_mm):
+        """Compute stride from point_sample_mm for point cloud subsampling.
+
+        Args:
+            ppmm: float; pixels per mm.
+            point_sample_mm: float; desired point spacing in mm (0.0 = no subsampling).
+
+        Returns:
+            int; stride value (1 = full resolution).
+        """
+        if point_sample_mm > 0:
+            return max(1, int(point_sample_mm * ppmm))
+        return 1
+
+    def _subsample_mask(self, C, stride):
+        """Subsample contact mask by stride for alignment with subsampled point cloud.
+
+        Args:
+            C: np.array (H, W); contact mask.
+            stride: int; subsampling stride.
+
+        Returns:
+            np.array; subsampled mask.
+        """
+        if stride > 1:
+            return C[::stride, ::stride]
+        return C
+
     def get_point_cloud(self, image, ppmm, color_dist_threshold=15,
                         height_threshold=0.2, use_mask=True, refine_mask=True, return_color=False,
-                        mask_only_pointcloud=False):
+                        mask_only_pointcloud=False, point_sample_mm=0.0):
         """
         Get the point cloud from the GelSight image.
         :param image: np.array (H, W, 3); the gelsight image.
@@ -212,6 +240,8 @@ class DepthEstimator:
         :param use_mask: bool; whether to use the contact mask.
         :param return_color: bool; whether to return the color information.
         :param mask_only_pointcloud: if True, returns only points where mask is True.
+        :param point_sample_mm: float; desired point spacing in mm.
+                                0.0 = no subsampling (full resolution).
         :return: np.array (N, 3); the point cloud (scaled in meters).
         """
         G, H, C = self.get_surface_info(
@@ -220,7 +250,10 @@ class DepthEstimator:
         if refine_mask:
             C = refine_contact_mask(C)
 
-        pc = height2pointcloud(H, ppmm) # Convert height map to point cloud
+        stride = self._get_point_sample_stride(ppmm, point_sample_mm)
+        C = self._subsample_mask(C, stride)
+
+        pc = height2pointcloud(H, ppmm, stride=stride)  # Convert height map to point cloud
 
         mask_flat = C.ravel()
         if use_mask:
@@ -230,10 +263,13 @@ class DepthEstimator:
                 pc_bg = pc.copy()
                 pc_bg[~mask_flat, 2] = 0.0
                 pc = pc_bg
-        
+
         if return_color:
-            # Convert image to grayscale and flatten
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).reshape(-1, 1)
+            # Convert image to grayscale; subsample before reshape for stride alignment
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            if stride > 1:
+                gray = gray[::stride, ::stride]
+            gray = gray.reshape(-1, 1)
             if use_mask:
                 gray[~mask_flat] = 0
             return pc, gray
@@ -244,7 +280,7 @@ class DepthEstimator:
                  color_dist_threshold=15, height_threshold=0.2, 
                  use_mask=True, refine_mask=True, 
                  relative=False, relative_scale=1.0, 
-                 mask_only_pointcloud=False):
+                 mask_only_pointcloud=False, point_sample_mm=0.0):
         """
         Estimate depth-related outputs from a GelSight image.
         
@@ -259,6 +295,8 @@ class DepthEstimator:
             relative: bool; whether to normalize depth to the range [0, 1].
             relative_scale: float; the scale for relative depth normalization.
             mask_only_pointcloud: bool; if True, use only masked area for point cloud.
+            point_sample_mm: float; desired point spacing in mm for pointcloud subsampling.
+                             0.0 = no subsampling (full resolution).
             
         Returns:
             dict: Dictionary with requested outputs:
@@ -277,6 +315,13 @@ class DepthEstimator:
         
         if refine_mask:
             C = refine_contact_mask(C)
+
+        # Save full-resolution mask BEFORE any pointcloud subsampling
+        if 'mask' in outputs:
+            result['mask'] = C.copy()
+        
+        # Compute stride for pointcloud subsampling (used only if 'pointcloud' in outputs)
+        stride = self._get_point_sample_stride(ppmm, point_sample_mm)
         
         # Compute requested outputs
         if 'gradient' in outputs:
@@ -303,9 +348,10 @@ class DepthEstimator:
             result['depth'] = depth_map
         
         if 'pointcloud' in outputs:
-            pc = height2pointcloud(H, ppmm)
+            C_sub = self._subsample_mask(C, stride)
+            pc = height2pointcloud(H, ppmm, stride=stride)
             
-            mask_flat = C.ravel()
+            mask_flat = C_sub.ravel()
             if use_mask:
                 if mask_only_pointcloud:
                     pc = pc[mask_flat]
@@ -315,9 +361,6 @@ class DepthEstimator:
                     pc = pc_bg
             
             result['pointcloud'] = pc
-        
-        if 'mask' in outputs:
-            result['mask'] = C
         
         return result
 
@@ -400,14 +443,30 @@ def poisson_dct_neumaan(gx, gy):
 
     return img_tt
 
-def height2pointcloud(H, ppmm):
-    """Convert height map to point cloud (normalflow style)."""
+def height2pointcloud(H, ppmm, stride=1):
+    """Convert height map to point cloud (normalflow style).
+
+    Args:
+        H: np.array (H, W); height map.
+        ppmm: float; pixels per mm.
+        stride: int; subsample stride on each axis (1 = full resolution).
+
+    Returns:
+        np.array (N, 3); point cloud in meters.
+    """
     h, w = H.shape
-    xx, yy = np.meshgrid(np.arange(w), np.arange(h))
-    xx = xx - w / 2 + 0.5
-    yy = yy - h / 2 + 0.5
+    if stride > 1:
+        yy = (np.arange(0, h, stride) - h / 2 + 0.5)
+        xx = (np.arange(0, w, stride) - w / 2 + 0.5)
+        X, Y = np.meshgrid(xx, yy)
+        H_sub = H[::stride, ::stride]
+    else:
+        yy = (np.arange(h) - h / 2 + 0.5)
+        xx = (np.arange(w) - w / 2 + 0.5)
+        X, Y = np.meshgrid(xx, yy)
+        H_sub = H
     # Stack and scale to mm, then to meters
-    pc = np.stack((xx, yy, H), axis=-1) / ppmm / 1000.0
+    pc = np.stack((X, Y, H_sub), axis=-1) / ppmm / 1000.0
     return pc.reshape(-1, 3)
 
 def refine_contact_mask(C):
