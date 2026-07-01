@@ -10,7 +10,7 @@ imgw: 240
 # Raw image width, height, and framerate
 raw_imgh: 320
 raw_imgw: 240
-framerate: 30
+framerate: 60
 # Force Estimation (Sparsh)
 force:
   enabled: false
