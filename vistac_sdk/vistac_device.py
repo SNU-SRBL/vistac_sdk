@@ -261,11 +261,19 @@ class Camera:
                     return self.last_good_frame
                 raise RuntimeError("ffmpeg pipe stalled and no good frame available.")
             raw_frame += remaining
-        frame = np.frombuffer(raw_frame, np.uint8).reshape(
-            (self.raw_imgh, self.raw_imgw, 3)
-        )
+        # ffmpeg outputs raw_imgw columns × raw_imgh rows.
+        # When auto_rotate swaps raw_imgh/raw_imgw, the reshape
+        # must still match the actual ffmpeg stream dimensions.
         if self.auto_rotate:
+            # Swapped: raw_imgw=320, raw_imgh=240 → ffmpeg at 320×240
+            frame = np.frombuffer(raw_frame, np.uint8).reshape(
+                (self.raw_imgw, self.raw_imgh, 3)  # (320, 240, 3) → matches ffmpeg
+            )
             frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        else:
+            frame = np.frombuffer(raw_frame, np.uint8).reshape(
+                (self.raw_imgh, self.raw_imgw, 3)
+            )
         self.last_good_frame = frame
         return frame
     
