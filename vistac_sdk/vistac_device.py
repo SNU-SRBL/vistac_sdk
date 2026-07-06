@@ -208,9 +208,23 @@ class Camera:
                 frame = self.get_image_internal(flush=True)
                 with self._lock:
                     self._latest_frame = frame
+            except RuntimeError as e:
+                # ffmpeg died — attempt reconnect
+                print(f"ffmpeg error: {e}. Reconnecting...")
+                try:
+                    self.process.kill()
+                    self.process.wait(timeout=2)
+                except Exception:
+                    pass
+                try:
+                    self.connect(verbose=False)
+                    print("ffmpeg reconnected.")
+                except Exception as e2:
+                    print(f"Reconnect failed: {e2}. Retrying in 1s...")
+                    time.sleep(1.0)
             except Exception as e:
                 print(f"Error in thread loop: {e}")
-            time.sleep(0.001)
+                time.sleep(0.001)
 
     def get_image_internal(self, flush=False):
         """
@@ -231,8 +245,22 @@ class Camera:
                 print(f"Flushed {flushed} stale frames from buffer.")
         raw_frame = self.process.stdout.read(self.raw_size)
         if len(raw_frame) != self.raw_size:
-            print("Warning: Incomplete frame read from camera. Skipping frame.")
-            return self.last_good_frame
+            # Incomplete read: try to read the remaining bytes.
+            # If ffmpeg died, detect and raise.
+            missing = self.raw_size - len(raw_frame)
+            remaining = self.process.stdout.read(missing)
+            if len(remaining) < missing:
+                # ffmpeg pipe broken — likely process died
+                rc = self.process.poll()
+                if rc is not None:
+                    raise RuntimeError(
+                        f"ffmpeg process died with code {rc}. Cannot read frame."
+                    )
+                # Pipe stalled but process alive — use last good frame once
+                if self.last_good_frame is not None:
+                    return self.last_good_frame
+                raise RuntimeError("ffmpeg pipe stalled and no good frame available.")
+            raw_frame += remaining
         frame = np.frombuffer(raw_frame, np.uint8).reshape(
             (self.raw_imgh, self.raw_imgw, 3)
         )
