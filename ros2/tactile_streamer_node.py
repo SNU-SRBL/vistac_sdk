@@ -452,7 +452,10 @@ def main(args=None):
     finally:
         if node is not None:
             node.destroy_node()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     main()

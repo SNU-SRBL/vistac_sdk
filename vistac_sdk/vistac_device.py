@@ -111,6 +111,7 @@ class Camera:
         self._thread = None
         self._running = False
         self._latest_frame = None
+        self._latest_frame_available = False
         self._lock = threading.Lock()
 
     def _find_digit_camera_id_by_serial(self, serial, verbose=True):
@@ -205,10 +206,13 @@ class Camera:
         """
         while self._running:
             try:
-                frame = self.get_image_internal(flush=True)
+                frame = self.get_image_internal()
                 with self._lock:
                     self._latest_frame = frame
+                    self._latest_frame_available = True
             except RuntimeError as e:
+                if not self._running:
+                    break
                 # ffmpeg died — attempt reconnect
                 print(f"ffmpeg error: {e}. Reconnecting...")
                 try:
@@ -217,12 +221,18 @@ class Camera:
                 except Exception:
                     pass
                 try:
+                    if not self._running:
+                        break
                     self.connect(verbose=False)
                     print("ffmpeg reconnected.")
                 except Exception as e2:
+                    if not self._running:
+                        break
                     print(f"Reconnect failed: {e2}. Retrying in 1s...")
                     time.sleep(1.0)
             except Exception as e:
+                if not self._running:
+                    break
                 print(f"Error in thread loop: {e}")
                 time.sleep(0.001)
 
@@ -290,7 +300,11 @@ class Camera:
         """
         if self._threaded:
             with self._lock:
-                return self._latest_frame.copy() if self._latest_frame is not None else None
+                if self._latest_frame_available and self._latest_frame is not None:
+                    frame = self._latest_frame.copy()
+                    self._latest_frame_available = False
+                    return frame
+                return None
         else:
             return self.get_image_internal(flush=flush)
 

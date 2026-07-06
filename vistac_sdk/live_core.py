@@ -195,11 +195,14 @@ class LiveTactileProcessor:
         """
         # Get latest camera frame
         frame = self.camera.get_image()
+
+        # No fresh camera frame available yet; avoid republishing stale results.
+        if frame is None:
+            return None, {}
         
         # If we have a new frame, send it to processor
-        if frame is not None:
-            timestamp = time.time()
-            self.processor.set_input_frame(frame, timestamp)
+        timestamp = time.time()
+        self.processor.set_input_frame(frame, timestamp)
         
         # Get latest result from processor
         result = self.processor.get_latest_result()
