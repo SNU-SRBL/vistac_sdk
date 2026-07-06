@@ -87,10 +87,10 @@ class Camera:
         # desired image size
         self.imgh = imgh
         self.imgw = imgw
-        # Auto-rotation flag: if vertical, set to True
-        self.auto_rotate = imgh > imgw
-        # If vertical, swap raw_imgh and raw_imgw for horizontal capture
-        if self.auto_rotate:
+        # DIGIT configs in this repo store the capture dimensions inverted.
+        # Normalize once here so ffmpeg talks to the device using the actual
+        # capture geometry, then keep the returned frame in that native layout.
+        if self.device_type and self.device_type.upper() == "DIGIT":
             self.raw_imgh, self.raw_imgw = raw_imgw, raw_imgh
             self.raw_size = self.raw_imgh * self.raw_imgw * 3
         # Get camera ID
@@ -251,39 +251,35 @@ class Camera:
                 return self.last_good_frame
             raise
         # ffmpeg outputs raw_imgw columns × raw_imgh rows.
-        # When auto_rotate swaps raw_imgh/raw_imgw, the reshape
-        # must still match the actual ffmpeg stream dimensions.
-        if self.auto_rotate:
-            # Reshape to the actual capture geometry before rotating.
-            frame = np.frombuffer(raw_frame, np.uint8).reshape(
-                (self.raw_imgh, self.raw_imgw, 3)
-            )
-            frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-        else:
-            frame = np.frombuffer(raw_frame, np.uint8).reshape(
-                (self.raw_imgh, self.raw_imgw, 3)
-            )
+        frame = np.frombuffer(raw_frame, np.uint8).reshape(
+            (self.raw_imgh, self.raw_imgw, 3)
+        )
         self.last_good_frame = frame
         return frame
 
     def _read_exact_frame_bytes(self):
         """
-        Read exactly one raw frame from the ffmpeg pipe.
+        Read one raw frame from the ffmpeg pipe.
         """
-        remaining = self.raw_size
-        chunks = []
-        while remaining > 0:
-            chunk = self.process.stdout.read(remaining)
-            if not chunk:
+        raw_frame = self.process.stdout.read(self.raw_size)
+        if len(raw_frame) != self.raw_size:
+            # Incomplete read: try to read the remaining bytes.
+            # If ffmpeg died, detect and raise.
+            missing = self.raw_size - len(raw_frame)
+            remaining = self.process.stdout.read(missing)
+            if len(remaining) < missing:
+                # ffmpeg pipe broken — likely process died
                 rc = self.process.poll()
                 if rc is not None:
                     raise RuntimeError(
                         f"ffmpeg process died with code {rc}. Cannot read frame."
                     )
-                raise RuntimeError("ffmpeg pipe stalled and no complete frame is available.")
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        return b"".join(chunks)
+                # Pipe stalled but process alive — use last good frame once
+                if self.last_good_frame is not None:
+                    return self.last_good_frame.tobytes()
+                raise RuntimeError("ffmpeg pipe stalled and no good frame available.")
+            raw_frame += remaining
+        return raw_frame
     
     def get_image(self, flush=False):
         """
