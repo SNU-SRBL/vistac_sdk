@@ -148,7 +148,7 @@ class Camera:
                 self.device,
                 format="v4l2",
                 framerate=self.framerate,
-                video_size="%dx%d" % (self.raw_imgw, self.raw_imgh),
+                video_size=(self.raw_imgw, self.raw_imgh),
                 pix_fmt="yuyv422",
             )
             .output("pipe:", format="rawvideo", pix_fmt="bgr24")
