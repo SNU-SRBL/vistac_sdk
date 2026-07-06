@@ -278,7 +278,7 @@ class TactileProcessor:
                     with self._lock:
                         self._latest_result = result
                 except Exception as e:
-                    warnings.warn(f"Processing error: {e}")
+                    print(f"[DEPTH] Processing error: {e}", flush=True)
             
             time.sleep(0.001)  # Small sleep to avoid busy-waiting
     

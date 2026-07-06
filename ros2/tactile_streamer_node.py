@@ -211,9 +211,36 @@ class TactileStreamerNode(Node):
         return msg
 
     def timer_callback(self):
+        if not hasattr(self, '_tick'):
+            self._tick = 0
+        self._tick += 1
+        
+        if not rclpy.ok():
+            print(f"[D{self._tick}] rclpy.ok()=FALSE", flush=True)
+            return
+        
+        # Heartbeat every tick so user can see timer is alive
+        if self._tick <= 3 or self._tick % 75 == 0:
+            print(f"[D{self._tick}] alive", flush=True)
+            
         frame, result_dict = self.processor.get_latest_output()
         if not result_dict:
+            if self._tick <= 5 or self._tick % 75 == 0:
+                # Check if camera thread is alive
+                has_frame = self.processor.camera.get_image() if hasattr(self.processor, 'camera') else '?'
+                print(f"[D{self._tick}] no result (camera_frame={'yes' if has_frame is not None else 'NO'})", flush=True)
             return
+        # Check raw frame for shift before publishing
+        raw_check = result_dict.get('raw')
+        if raw_check is not None:
+            rd = np.sum(np.abs(raw_check[:-1].astype(np.int16) - raw_check[1:].astype(np.int16)), axis=(1,2))
+            med = float(np.median(rd))
+            mx = float(np.max(rd))
+            if med > 0 and mx / med > 3.0:
+                print(f"[RAW-SHIFT at D{self._tick}] ratio={mx/med:.1f} (max={mx:.0f}, med={med:.0f})", flush=True)
+        
+        if self._tick <= 5 or self._tick % 75 == 0:
+            print(f"[D{self._tick}] ok, {len(result_dict)} outs", flush=True)
             
         header = Header()
         header.stamp = self.get_clock().now().to_msg()
@@ -449,7 +476,15 @@ def main(args=None):
     try:
         node = TactileStreamerNode()
         rclpy.spin(node)
+    except rclpy.executors.ExternalShutdownException:
+        print("[EXIT] ExternalShutdownException: rclpy context shut down from another thread", flush=True)
+    except Exception as e:
+        import traceback
+        print(f"[EXIT] Unhandled exception during spin: {e}", flush=True)
+        traceback.print_exc()
     finally:
+        if node is not None:
+            print("[EXIT] Destroying node...", flush=True)
         if node is not None:
             node.destroy_node()
         try:
