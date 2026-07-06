@@ -87,12 +87,10 @@ class Camera:
         # desired image size
         self.imgh = imgh
         self.imgw = imgw
-        # DIGIT configs in this repo store the capture dimensions inverted.
-        # Normalize once here so ffmpeg talks to the device using the actual
-        # capture geometry, then keep the returned frame in that native layout.
-        if self.device_type and self.device_type.upper() == "DIGIT":
-            self.raw_imgh, self.raw_imgw = raw_imgw, raw_imgh
-            self.raw_size = self.raw_imgh * self.raw_imgw * 3
+        # Sensor dimensions are auto-detected at connect() time via V4L2
+        # device probing (_probe_device_resolution). Config values are used
+        # as initial defaults; the probe overrides them with the actual
+        # camera resolution to avoid blind dimension swaps.
         # Get camera ID
         # --- DIGIT-specific device identification ---
         if self.device_type and self.device_type.upper() == "DIGIT" and self.serial:
@@ -139,10 +137,77 @@ class Camera:
             print(f"No DIGIT camera found with serial {serial}")
         return None
 
+    def _probe_device_resolution(self):
+        """
+        Query the V4L2 device for its actual frame dimensions.
+
+        Runs v4l2-ctl --get-fmt-video and parses the current
+        width and height from the device. This replaces the old
+        blind DIGIT dimension swap with real sensor detection.
+
+        Returns
+        -------
+        tuple
+            (width, height) in pixels.
+
+        Raises
+        ------
+        RuntimeError
+            If v4l2-ctl fails, returns unparseable
+            output, or the device cannot be queried.
+
+        """
+        try:
+            result = subprocess.run(
+                ["v4l2-ctl", "-d", self.device, "--get-fmt-video"],
+                capture_output=True, text=True, timeout=3.0
+            )
+        except FileNotFoundError:
+            raise RuntimeError(
+                "v4l2-ctl not found. Install v4l-utils package: "
+                "sudo apt install v4l-utils"
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"v4l2-ctl timed out querying {self.device}"
+            )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"v4l2-ctl failed on {self.device}: {result.stderr.strip()}"
+            )
+        match = re.search(
+            r"Width/Height\s*:\s*(\d+)/(\d+)", result.stdout
+        )
+        if not match:
+            raise RuntimeError(
+                f"Cannot parse v4l2-ctl output from {self.device}: "
+                f"{result.stdout.strip()}"
+            )
+        width = int(match.group(1))
+        height = int(match.group(2))
+        return width, height
+
     def connect(self, verbose=True):
         """
         Connect to the camera using FFMpeg streamer.
+
+        Before starting ffmpeg, probes the actual V4L2 sensor
+        resolution to ensure correct video_size and raw_size.
+        Falls back to config values if probing fails.
         """
+        # Probe actual sensor resolution via V4L2 — replaces the old
+        # blind DIGIT dimension swap with runtime auto-detection.
+        try:
+            probe_w, probe_h = self._probe_device_resolution()
+            if verbose:
+                print(f"Detected camera resolution: {probe_w}x{probe_h}")
+            self.raw_imgw = probe_w
+            self.raw_imgh = probe_h
+            self.raw_size = self.raw_imgh * self.raw_imgw * 3
+        except (RuntimeError, FileNotFoundError) as e:
+            if verbose:
+                print(f"Could not probe camera resolution ({e}). "
+                      f"Using config values: {self.raw_imgw}x{self.raw_imgh}.")
         # Command to capture video using ffmpeg and high resolution
         self.ffmpeg_command = (
             ffmpeg.input(
@@ -273,8 +338,21 @@ class Camera:
         """
         raw_frame = self.process.stdout.read(self.raw_size)
         if len(raw_frame) != self.raw_size:
-            # Incomplete read: try to read the remaining bytes.
-            # If ffmpeg died, detect and raise.
+            # Frame-boundary straddle detected: the pipe read returned
+            # a partial segment, which means data may cross frame
+            # boundaries. Log a warning (rate-limited to the first 3
+            # occurrences) so diagnostics are visible without flooding
+            # the terminal at 60 fps.
+            if not hasattr(self, '_straddle_warn_count'):
+                self._straddle_warn_count = 0
+            if self._straddle_warn_count < 3:
+                import warnings
+                warnings.warn(
+                    f"Incomplete frame read: got {len(raw_frame)} bytes, "
+                    f"expected {self.raw_size}. This may indicate a "
+                    f"frame-boundary straddle."
+                )
+                self._straddle_warn_count += 1
             missing = self.raw_size - len(raw_frame)
             remaining = self.process.stdout.read(missing)
             if len(remaining) < missing:
