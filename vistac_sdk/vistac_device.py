@@ -180,7 +180,7 @@ class Camera:
                         f"Camera {getattr(self, 'serial', 'unknown')} ffmpeg "
                         f"exited with code {self.process.returncode} during warm-up."
                     )
-                self.process.stdout.read(self.raw_size)
+                self._read_exact_frame_bytes()
         except (RuntimeError, TimeoutError):
             # Always kill ffmpeg on any failure during warm-up
             try:
@@ -237,37 +237,26 @@ class Camera:
             while True:
                 rlist, _, _ = select.select([self.process.stdout], [], [], 0)
                 if rlist:
-                    self.process.stdout.read(self.raw_size)
+                    self._read_exact_frame_bytes()
                     flushed += 1
                 else:
                     break
             if flushed > 0:
                 print(f"Flushed {flushed} stale frames from buffer.")
-        raw_frame = self.process.stdout.read(self.raw_size)
-        if len(raw_frame) != self.raw_size:
-            # Incomplete read: try to read the remaining bytes.
-            # If ffmpeg died, detect and raise.
-            missing = self.raw_size - len(raw_frame)
-            remaining = self.process.stdout.read(missing)
-            if len(remaining) < missing:
-                # ffmpeg pipe broken — likely process died
-                rc = self.process.poll()
-                if rc is not None:
-                    raise RuntimeError(
-                        f"ffmpeg process died with code {rc}. Cannot read frame."
-                    )
-                # Pipe stalled but process alive — use last good frame once
-                if self.last_good_frame is not None:
-                    return self.last_good_frame
-                raise RuntimeError("ffmpeg pipe stalled and no good frame available.")
-            raw_frame += remaining
+        try:
+            raw_frame = self._read_exact_frame_bytes()
+        except RuntimeError:
+            # Pipe stalled but process alive — use last good frame once.
+            if self.last_good_frame is not None:
+                return self.last_good_frame
+            raise
         # ffmpeg outputs raw_imgw columns × raw_imgh rows.
         # When auto_rotate swaps raw_imgh/raw_imgw, the reshape
         # must still match the actual ffmpeg stream dimensions.
         if self.auto_rotate:
-            # Swapped: raw_imgw=320, raw_imgh=240 → ffmpeg at 320×240
+            # Reshape to the actual capture geometry before rotating.
             frame = np.frombuffer(raw_frame, np.uint8).reshape(
-                (self.raw_imgw, self.raw_imgh, 3)  # (320, 240, 3) → matches ffmpeg
+                (self.raw_imgh, self.raw_imgw, 3)
             )
             frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
         else:
@@ -276,6 +265,25 @@ class Camera:
             )
         self.last_good_frame = frame
         return frame
+
+    def _read_exact_frame_bytes(self):
+        """
+        Read exactly one raw frame from the ffmpeg pipe.
+        """
+        remaining = self.raw_size
+        chunks = []
+        while remaining > 0:
+            chunk = self.process.stdout.read(remaining)
+            if not chunk:
+                rc = self.process.poll()
+                if rc is not None:
+                    raise RuntimeError(
+                        f"ffmpeg process died with code {rc}. Cannot read frame."
+                    )
+                raise RuntimeError("ffmpeg pipe stalled and no complete frame is available.")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
     
     def get_image(self, flush=False):
         """
