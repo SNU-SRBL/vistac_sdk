@@ -1,34 +1,49 @@
-import ffmpeg
-import subprocess
-import numpy as np
-import cv2
+"""Quick test of DIGIT camera using cv2.VideoCapture (matches vistac_device.Camera).
 
-'''This script captures video frames from a camera using ffmpeg and displays them using OpenCV.
-It reads raw video frames in YUYV format, converts them to BGR format, and displays them in a window.
-Press 'q' to exit the display window.'
-'''
+Press 'q' to exit.
+"""
+import cv2
+import numpy as np
+
 
 if __name__ == "__main__":
-    device = "/dev/video0"
-    width, height = 320, 240
-    ffmpeg_command = (
-        ffmpeg.input(device, format="v4l2", framerate=60, video_size=f"{width}x{height}", pix_fmt="yuyv422")
-        .output("pipe:", format="rawvideo", pix_fmt="bgr24")
-        .compile()
-    )
-    process = subprocess.Popen(ffmpeg_command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    cap = cv2.VideoCapture(0)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
 
+    # Warmup
+    for _ in range(10):
+        cap.read()
+
+    print("Camera ready. Press 'q' to quit.")
+    reads = 0
     try:
         while True:
-            raw_frame = process.stdout.read(width * height * 3)
-            if len(raw_frame) != width * height * 3:
-                print("Incomplete frame read, skipping...")
+            ret, frame = cap.read()
+            if not ret:
+                print(f"cap.read() returned False at frame {reads}")
                 break
-            frame = np.frombuffer(raw_frame, np.uint8).reshape((height, width, 3))
-            cv2.imshow("Test Frame", frame)
+            reads += 1
+            frame = frame.copy()
+
+            # Row-continuity validation (same as vistac_device)
+            if reads > 1:
+                rd = np.sum(np.abs(
+                    frame[:-1].astype(np.int16) - frame[1:].astype(np.int16)
+                ), axis=(1, 2))
+                med = float(np.median(rd))
+                mx = float(np.max(rd))
+                if med > 0 and mx / med > 3.0:
+                    print(f"RAW-SHIFT at frame {reads}: ratio={mx/med:.1f}")
+                    continue
+
+            cv2.putText(frame, f"frame={reads}", (5, 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+            cv2.imshow("DIGIT Test", frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
     finally:
-        process.terminate()
-        process.wait()
+        cap.release()
         cv2.destroyAllWindows()
+        print(f"Test done. {reads} frames captured.")

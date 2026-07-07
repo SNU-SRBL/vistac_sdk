@@ -90,7 +90,7 @@ class Camera:
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.raw_imgw)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.raw_imgh)
         self.cap.set(cv2.CAP_PROP_FPS, self.framerate)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
         if verbose:
             print("Warming up the camera...")
         warm_up_frames = 10
@@ -106,26 +106,37 @@ class Camera:
 
     def _thread_loop(self):
         """Background frame capture thread."""
+        total_reads = 0
+        drop_streak = 0
         while self._running:
             try:
                 ret, frame = self.cap.read()
-                if ret:
-                    frame = frame.copy()
-                    # Validate: check for row discontinuity (USB corruption)
-                    if self.last_good_frame is not None:
-                        row_d = np.sum(np.abs(
-                            frame[:-1].astype(np.int16) - frame[1:].astype(np.int16)
-                        ), axis=(1,2))
-                        med = float(np.median(row_d))
-                        mx = float(np.max(row_d))
-                        if med > 0 and mx / med > 3.0:
-                            # Corrupted frame - keep last good one
-                            with self._lock:
-                                self._latest_frame = self.last_good_frame.copy()
-                            continue
-                    self.last_good_frame = frame
-                    with self._lock:
-                        self._latest_frame = frame
+                total_reads += 1
+                if not ret:
+                    drop_streak += 1
+                    if drop_streak <= 3 or drop_streak % 300 == 0:
+                        print(f"[CAM] cap.read()=False streak={drop_streak}", flush=True)
+                    time.sleep(0.001)
+                    continue
+                drop_streak = 0
+                frame = frame.copy()
+                # Validate: check for row discontinuity (USB corruption)
+                if self.last_good_frame is not None:
+                    row_d = np.sum(np.abs(
+                        frame[:-1].astype(np.int16) - frame[1:].astype(np.int16)
+                    ), axis=(1,2))
+                    med = float(np.median(row_d))
+                    mx = float(np.max(row_d))
+                    if med > 0 and mx / med > 3.0:
+                        # Corrupted frame - keep last good one
+                        with self._lock:
+                            self._latest_frame = self.last_good_frame.copy()
+                        continue
+                self.last_good_frame = frame
+                with self._lock:
+                    self._latest_frame = frame
+                if total_reads % 1000 == 0:
+                    print(f"[CAM] read={total_reads}", flush=True)
             except Exception as e:
                 print(f"[CAM] Error: {e}", flush=True)
             time.sleep(0.001)
@@ -134,7 +145,6 @@ class Camera:
         """Get the latest image from the camera."""
         if self._threaded:
             with self._lock:
-                has = self._latest_frame is not None
                 if self._latest_frame is not None:
                     return self._latest_frame.copy()
                 return None
