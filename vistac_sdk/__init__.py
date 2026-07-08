@@ -6,29 +6,29 @@ tactile sensors (DIGIT). It includes both low-level estimators and high-level
 streaming interfaces.
 
 Main Classes:
-- LiveTactileProcessor: High-level threaded streaming interface (recommended)
-- TactileProcessor: Low-level processor with selective output computation
+- TactileProcessor: Unified processor with selective output computation
+- Camera: Synchronous DIGIT camera capture
 - DepthEstimator: MLP-based depth reconstruction from tactile images
 - ForceEstimator: Sparsh ViT-based force estimation from temporal pairs
 - TemporalBuffer: Circular buffer for temporal frame management
 
 Example:
-    >>> from vistac_sdk import LiveTactileProcessor
-    >>> processor = LiveTactileProcessor(serial="D21273", enable_force=True)
-    >>> processor.start()
-    >>> frame, result = processor.get_latest_output()
-    >>> # result = {'depth': ..., 'force_field': ..., 'force_vector': ...}
+    >>> from vistac_sdk import TactileProcessor
+    >>> processor = TactileProcessor(model_path="model.pth", enable_depth=True)
+    >>> processor.load_background(bg_image)
+    >>> result = processor.process(image=frame, outputs=['depth', 'pointcloud'])
+    >>> # result = {'depth': ..., 'pointcloud': ...}
 """
 
 __version__ = "1.0.0"
-
-# High-level streaming interface
-from .live_core import LiveTactileProcessor
 
 # Low-level processors
 from .tactile_processor import TactileProcessor
 from .vistac_reconstruct import DepthEstimator
 from .vistac_force import ForceEstimator
+
+# Device interface
+from .vistac_device import Camera
 
 # Utilities
 from .temporal_buffer import TemporalBuffer
@@ -42,17 +42,19 @@ from .viz_utils import (
 )
 
 __all__ = [
-    # Main interfaces
-    "LiveTactileProcessor",
+    # Main processors
     "TactileProcessor",
-    
+
+    # Camera
+    "Camera",
+
     # Estimators
     "DepthEstimator",
     "ForceEstimator",
-    
+
     # Utilities
     "TemporalBuffer",
-    
+
     # Visualization
     "plot_gradients",
     "force_field_to_rgb",

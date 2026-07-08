@@ -13,11 +13,17 @@ find_package(rclpy REQUIRED)
 # Install Python modules
 ament_python_install_package(${PROJECT_NAME})
 
-# Install Python executables
+# Install Python executables (camera_node + process_node = separated architecture)
 install(PROGRAMS
-  ros2/tactile_streamer_node.py
+  ros2/camera_node.py
   DESTINATION lib/${PROJECT_NAME}
-  RENAME tactile_streamer_node
+  RENAME camera_node
+)
+
+install(PROGRAMS
+  ros2/process_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME process_node
 )
 
 # Install launch files

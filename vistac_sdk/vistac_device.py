@@ -1,23 +1,20 @@
 import os
 import re
-import subprocess
 
 import cv2
-import ffmpeg
 import numpy as np
-import threading
 import time
 
 import pyudev
 
 from vistac_sdk.utils import load_config
 
-'''This module provides a Camera class for low latency image acquisition using FFMpeg.
+'''This module provides a Camera class for low latency image acquisition using OpenCV.
 It supports both DIGIT cameras and generic V4L2 cameras.
 '''
 
 class Camera:
-    """The camera class with low latency (based on gs_sdk FastCamera)."""
+    """The camera class (synchronous, based on digit-interface pattern)."""
 
     def __init__(
         self,
@@ -32,7 +29,6 @@ class Camera:
         config_path=None,
         default_config=None,
         verbose=True,
-        thread=False,
     ):
         if serial is not None or config_path is not None:
             config = load_config(
@@ -77,13 +73,6 @@ class Camera:
             self.dev_id = get_camera_id(self.device_type, verbose)
             self.device = f"/dev/video{self.dev_id}"
 
-        self.last_good_frame = None
-        self._threaded = thread
-        self._thread = None
-        self._running = False
-        self._latest_frame = None
-        self._lock = threading.Lock()
-
     def connect(self, verbose=True):
         """Connect to the camera using OpenCV VideoCapture (digit-interface pattern)."""
         self.cap = cv2.VideoCapture(self.dev_id)
@@ -99,64 +88,13 @@ class Camera:
         if verbose:
             print("Camera ready for use!")
 
-        if self._threaded:
-            self._running = True
-            self._thread = threading.Thread(target=self._thread_loop, daemon=True)
-            self._thread.start()
-
-    def _thread_loop(self):
-        """Background frame capture thread."""
-        total_reads = 0
-        drop_streak = 0
-        while self._running:
-            try:
-                ret, frame = self.cap.read()
-                total_reads += 1
-                if not ret:
-                    drop_streak += 1
-                    if drop_streak <= 3 or drop_streak % 300 == 0:
-                        print(f"[CAM] cap.read()=False streak={drop_streak}", flush=True)
-                    time.sleep(0.001)
-                    continue
-                drop_streak = 0
-                frame = frame.copy()
-                # Validate: check for row discontinuity (USB corruption)
-                if self.last_good_frame is not None:
-                    row_d = np.sum(np.abs(
-                        frame[:-1].astype(np.int16) - frame[1:].astype(np.int16)
-                    ), axis=(1,2))
-                    med = float(np.median(row_d))
-                    mx = float(np.max(row_d))
-                    if med > 0 and mx / med > 3.0:
-                        # Corrupted frame - keep last good one
-                        with self._lock:
-                            self._latest_frame = self.last_good_frame.copy()
-                        continue
-                self.last_good_frame = frame
-                with self._lock:
-                    self._latest_frame = frame
-                if total_reads % 1000 == 0:
-                    print(f"[CAM] read={total_reads}", flush=True)
-            except Exception as e:
-                print(f"[CAM] Error: {e}", flush=True)
-            time.sleep(0.001)
-
     def get_image(self, flush=False):
         """Get the latest image from the camera."""
-        if self._threaded:
-            with self._lock:
-                if self._latest_frame is not None:
-                    return self._latest_frame.copy()
-                return None
-        else:
-            ret, frame = self.cap.read()
-            return frame if ret else None
+        ret, frame = self.cap.read()
+        return frame.copy() if ret else None
 
     def release(self):
         """Release camera resources."""
-        self._running = False
-        if self._thread is not None:
-            self._thread.join(timeout=1.0)
         if hasattr(self, 'cap') and self.cap is not None:
             self.cap.release()
 
@@ -199,20 +137,6 @@ def resize_crop(img, imgw, imgh):
     ]
     img = cv2.resize(img, (imgw, imgh))
     return img
-
-
-if __name__ == "__main__":
-    cam = Camera(serial="D21275", sensors_root="sensors")
-    cam.connect()
-    print("Camera connected.")
-    while True:
-        image = cam.get_image()
-        cv2.imshow("Captured Image", image)
-        key = cv2.waitKey(0)
-        if key == ord('q'):
-            break
-    cam.release()
-    cv2.destroyAllWindows()
 
 
 class DigitHandler:
