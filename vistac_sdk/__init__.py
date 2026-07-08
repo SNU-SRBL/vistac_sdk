@@ -24,6 +24,7 @@ __version__ = "1.0.0"
 
 # Low-level processors
 from .tactile_processor import TactileProcessor
+from .processing_engine import ProcessingEngine
 from .vistac_reconstruct import DepthEstimator
 from .vistac_force import ForceEstimator
 
@@ -44,6 +45,9 @@ from .viz_utils import (
 __all__ = [
     # Main processors
     "TactileProcessor",
+
+    # Processing engine
+    "ProcessingEngine",
 
     # Camera
     "Camera",

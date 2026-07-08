@@ -1,64 +1,61 @@
 #!/usr/bin/env python3
-"""Process node: reads raw camera frames from shared memory, runs TactileProcessor, publishes depth/pointcloud/force.
+"""Process node: reads raw SHM, runs ProcessingEngine in-process, publishes ROS.
 
-Runs in its own process (separate GIL from camera node).
-Reads frames from shared memory (written by camera_shm), re-publishes
-/tactile/{serial}/raw, then runs depth/force estimation.
+ProcessingEngine handles SHM reading, corruption filter, background collection,
+and TactileProcessor management — all pure Python, no ROS.
+
+This node reads frames from the engine, publishes /raw to ROS, feeds frames to
+the engine's processor, polls results, and publishes depth/pc/force.
+
+Topics (published per serial):
+  /tactile/{serial}/raw         — Image (bgr8)
+  /tactile/{serial}/depth       — Image (mono8)
+  /tactile/{serial}/gradient    — Image (32FC2)
+  /tactile/{serial}/pointcloud  — PointCloud2
+  /tactile/{serial}/force_field — Image (32FC3)
 """
+
+import time
+from typing import Dict
 
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rcl_interfaces.msg import ParameterDescriptor, ParameterType
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+
+# BestEffort QoS — fire-and-forget, no ACK/retransmission overhead
+_BE_QOS = QoSProfile(
+    depth=1,
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    durability=DurabilityPolicy.VOLATILE,
+)
 from sensor_msgs.msg import Image, PointCloud2, PointField
 from geometry_msgs.msg import WrenchStamped
 from std_msgs.msg import Header
-import cv2
 import numpy as np
-import pathlib
-import time
 
-from multiprocessing import shared_memory
-
-from vistac_sdk.tactile_processor import TactileProcessor
-from vistac_sdk.utils import load_config
-from vistac_sdk.viz_utils import force_field_to_rgb
-
-# Background collection constants
-BG_COLLECTION_FRAMES = 10
-BG_COLLECTION_DELAY_SEC = 0.2
+from vistac_sdk.processing_engine import ProcessingEngine
 
 
 class TactileProcessNode(Node):
-    """Reads raw frames from shared memory, runs depth/force estimation,
-    and publishes results (raw, depth, pointcloud, force_field, force_vector).
-
-    Raw frames arrive via shared memory from camera_shm process, then are
-    re-published as /tactile/{serial}/raw for debugging/recording.
-
-    Topics (published):
-      /tactile/{serial}/raw       (re-published from shm)
-      /tactile/{serial}/depth
-      /tactile/{serial}/gradient
-      /tactile/{serial}/pointcloud
-      /tactile/{serial}/force_field
-      /tactile/{serial}/force_field_viz
-      /tactile/{serial}/force_vector
-    """
+    """ROS publisher: reads raw from SHM, feeds ProcessingEngine, publishes."""
 
     def __init__(self):
         super().__init__('tactile_process_node')
 
-        # Declare all parameters
-        self.declare_parameter('serial', 'YOUR_SENSOR_SERIAL')
+        # ---- Declare parameters ----
+        self.declare_parameter(
+            'serials', value=[''],
+            descriptor=ParameterDescriptor(
+                type=ParameterType.PARAMETER_STRING_ARRAY))
         self.declare_parameter('sensors_root', '../sensors')
         self.declare_parameter('mode', 'depth')
         self.declare_parameter('model_device', 'cuda')
         self.declare_parameter('enable_force', False)
         self.declare_parameter('temporal_stride', 5)
         self.declare_parameter(
-            'outputs',
-            value=[''],
+            'outputs', value=[''],
             descriptor=ParameterDescriptor(
                 type=ParameterType.PARAMETER_STRING_ARRAY))
         self.declare_parameter('use_mask', True)
@@ -72,13 +69,18 @@ class TactileProcessNode(Node):
         self.declare_parameter('force_field_scale', 1.0)
         self.declare_parameter('force_field_baseline', False)
 
-        serial = self.get_parameter('serial').value
+        serials_raw = self.get_parameter('serials').value
+        self._serials: list = (
+            [] if not serials_raw or serials_raw == ['']
+            else list(serials_raw))
+
         sensors_root = self.get_parameter('sensors_root').value
         mode = self.get_parameter('mode').value
         model_device = self.get_parameter('model_device').value
         enable_force = self.get_parameter('enable_force').value
         temporal_stride = self.get_parameter('temporal_stride').value
-        outputs_param = [s for s in self.get_parameter('outputs').value if s]
+        outputs_param = [s for s in
+                         self.get_parameter('outputs').value if s]
         use_mask = self.get_parameter('use_mask').value
         refine_mask = self.get_parameter('refine_mask').value
         relative = self.get_parameter('relative').value
@@ -88,26 +90,11 @@ class TactileProcessNode(Node):
         point_sample_mm = self.get_parameter('point_sample_mm').value
         contact_mode = self.get_parameter('contact_mode').value
         rate = self.get_parameter('rate').value
-        self.force_field_scale = self.get_parameter(
+        force_field_scale = self.get_parameter(
             'force_field_scale').value
+        force_field_baseline = bool(
+            self.get_parameter('force_field_baseline').value)
 
-        # Connect to shared memory (retry up to 10s for camera startup)
-        shm_name = f"tactile_{serial}"
-        shm = None
-        for attempt in range(100):
-            try:
-                shm = shared_memory.SharedMemory(name=shm_name, create=False)
-                break
-            except FileNotFoundError:
-                time.sleep(0.1)
-        if shm is None:
-            raise RuntimeError(
-                f"Shared memory '{shm_name}' not found after 10s")
-        self._shm = shm
-        self._last_seq = -1
-        self._serial = serial
-
-        # Determine outputs based on parameter or mode
         if outputs_param:
             outputs = list(outputs_param)
         else:
@@ -120,366 +107,148 @@ class TactileProcessNode(Node):
                 'pointcloud_force': ['pointcloud', 'force_field', 'mask'],
             }
             outputs = mode_map.get(mode, ['depth'])
-        self.outputs = outputs
 
-        self._depth_kwargs = {
-            'use_mask': use_mask,
-            'refine_mask': refine_mask,
-            'relative': relative,
-            'relative_scale': relative_scale,
-            'mask_only_pointcloud': mask_only_pointcloud,
-            'point_sample_mm': point_sample_mm,
-        }
-
-        # Load sensor config
-        root = pathlib.Path(sensors_root)
-        config_path = str(root / serial / f'{serial}.yaml')
-        config = load_config(config_path=config_path)
-        ppmm = config['ppmm']
-
-        # Resolve model paths
-        model_path = str(root / serial / 'model' / 'nnmodel.pth')
-        force_encoder_path = str(
-            pathlib.Path(sensors_root).parent / 'models' / 'sparsh_dino_base_encoder.ckpt')
-        force_decoder_path = str(
-            pathlib.Path(sensors_root).parent / 'models' / 'sparsh_digit_forcefield_decoder.pth')
-
-        # Read force config
-        force_cfg = config.get('force', {}) or {}
-        force_vector_scale_cfg = force_cfg.get(
-            'force_vector_scale', [1.0, 1.0, 1.0])
-        force_field_baseline_flag = bool(
-            self.get_parameter('force_field_baseline').value)
-
-        # Initialize TactileProcessor
-        depth_outputs = {'depth', 'gradient', 'pointcloud', 'mask'}
-        enable_depth = any(o in depth_outputs for o in outputs)
-        force_outputs = {'force_field', 'force_vector'}
-        enable_force_est = enable_force or any(
-            o in force_outputs for o in outputs)
-
-        self.processor = TactileProcessor(
-            model_path=model_path if enable_depth else None,
-            enable_depth=enable_depth,
-            enable_force=enable_force_est,
-            force_encoder_path=force_encoder_path,
-            force_decoder_path=force_decoder_path,
+        # ---- ProcessingEngine (in-process, pure Python) ----
+        self.get_logger().info('Creating ProcessingEngine...')
+        self._engine = ProcessingEngine(
+            serials=self._serials,
+            sensors_root=sensors_root,
+            model_device=model_device,
+            enable_force=enable_force,
             temporal_stride=temporal_stride,
-            bg_offset=0.5,
-            device=model_device,
-            ppmm=ppmm,
+            outputs=outputs,
+            use_mask=use_mask,
+            refine_mask=refine_mask,
+            relative=relative,
+            relative_scale=relative_scale,
+            mask_only_pointcloud=mask_only_pointcloud,
+            point_sample_mm=point_sample_mm,
             contact_mode=contact_mode,
-            force_field_baseline=force_field_baseline_flag,
-            force_vector_scale=force_vector_scale_cfg,
+            force_field_scale=force_field_scale,
+            force_field_baseline=force_field_baseline,
         )
 
-        # Background collection state
-        self._bg_buffer = []
-        self._bg_done = False
-        self.ppmm = ppmm
+        active_sensors = [s for s in self._serials
+                          if s in self._engine._shms]
+        if not active_sensors:
+            self.get_logger().fatal('No sensors initialized')
+            raise RuntimeError('No sensors initialized')
 
-        # Publish raw frame (re-published from shm)
-        self.raw_pub = self.create_publisher(
-            Image, f'tactile/{serial}/raw', 10)
+        # Sequential background collection
+        self.get_logger().info('Collecting backgrounds...')
+        for serial in active_sensors:
+            self._engine.collect_background(serial)
 
-        # Create publishers
-        self.output_publishers = {}
-        base_topic = f'tactile/{serial}'
-        for output in outputs:
-            if output == 'depth':
-                self.output_publishers['depth'] = self.create_publisher(
-                    Image, f'{base_topic}/depth', 10)
-            elif output == 'gradient':
-                self.output_publishers['gradient'] = self.create_publisher(
-                    Image, f'{base_topic}/gradient', 10)
-            elif output == 'pointcloud':
-                self.output_publishers['pointcloud'] = \
-                    self.create_publisher(
-                        PointCloud2, f'{base_topic}/pointcloud', 10)
-            elif output == 'force_field':
-                self.output_publishers['force_field'] = \
-                    self.create_publisher(
-                        Image, f'{base_topic}/force_field', 10)
-                self.output_publishers['force_field_viz'] = \
-                    self.create_publisher(
-                        Image, f'{base_topic}/force_field_viz', 10)
-            elif output == 'force_vector':
-                self.output_publishers['force_vector'] = \
-                    self.create_publisher(
-                        WrenchStamped, f'{base_topic}/force_vector', 10)
-            elif output == 'raw':
-                # Also support raw pass-through if configured
-                self.output_publishers['raw'] = self.create_publisher(
-                    Image, f'{base_topic}/raw', 10)
+        # ---- Publishers (BestEffort QoS) ----
+        self.raw_pubs: Dict[str, object] = {}
+        self.output_publishers: Dict[str, dict] = {}
+        for serial in active_sensors:
+            self.raw_pubs[serial] = self.create_publisher(
+                Image, f'tactile/{serial}/raw', _BE_QOS)
+            base_topic = f'tactile/{serial}'
+            self.output_publishers[serial] = {}
+            for output in outputs:
+                if output == 'depth':
+                    self.output_publishers[serial]['depth'] = \
+                        self.create_publisher(
+                            Image, f'{base_topic}/depth', _BE_QOS)
+                elif output == 'gradient':
+                    self.output_publishers[serial]['gradient'] = \
+                        self.create_publisher(
+                            Image, f'{base_topic}/gradient', _BE_QOS)
+                elif output == 'pointcloud':
+                    self.output_publishers[serial]['pointcloud'] = \
+                        self.create_publisher(
+                            PointCloud2, f'{base_topic}/pointcloud',
+                            _BE_QOS)
+                elif output == 'force_field':
+                    self.output_publishers[serial]['force_field'] = \
+                        self.create_publisher(
+                            Image, f'{base_topic}/force_field', _BE_QOS)
+                    self.output_publishers[serial]['force_field_viz'] = \
+                        self.create_publisher(
+                            Image, f'{base_topic}/force_field_viz',
+                            _BE_QOS)
+                elif output == 'force_vector':
+                    self.output_publishers[serial]['force_vector'] = \
+                        self.create_publisher(
+                            WrenchStamped,
+                            f'{base_topic}/force_vector', _BE_QOS)
+                elif output == 'raw':
+                    self.output_publishers[serial]['raw'] = \
+                        self.create_publisher(
+                            Image, f'{base_topic}/raw', _BE_QOS)
 
-        self.timer = self.create_timer(1.0 / rate, self.timer_callback)
+        # ---- Per-sensor timers (SingleThreadedExecutor processes one at a time) ----
+        self._sensor_timers: Dict[str, object] = {}
+        for serial in active_sensors:
+            self._sensor_timers[serial] = self.create_timer(
+                1.0 / rate,
+                lambda s=serial: self._handle_sensor(s),
+            )
+
         self.get_logger().info(
-            f'Process node ready for {serial} ({model_device})')
+            f'Process node ready for {len(active_sensors)} sensors '
+            f'({", ".join(active_sensors)}) on {model_device}')
 
-    def _read_shm_frame(self) -> np.ndarray | None:
-        """Read latest frame from shared memory. Returns BGR array or None."""
-        buf = self._shm.buf
-        valid = int(buf[24])
-        if not valid:
-            return None
-        seq = int.from_bytes(buf[0:8], 'little')
-        if seq == self._last_seq:
-            return None
-        self._last_seq = seq
-        h = int.from_bytes(buf[16:20], 'little')
-        w = int.from_bytes(buf[20:24], 'little')
-        rgb = np.frombuffer(buf[32:], dtype=np.uint8).reshape(h, w, 3)
-        return rgb[..., ::-1]  # RGB→BGR
+    # ------------------------------------------------------------------
+    # Timer callback
+    # ------------------------------------------------------------------
 
-    def _publish_raw(self, bgr: np.ndarray, stamp):
-        """Publish BGR frame as ROS Image (bgr8)."""
+    def _handle_sensor(self, serial: str):
+        """Read frame from engine, publish raw, feed processor, publish results."""
+        now = self.get_clock().now()
+        bgr = self._engine.read_frame(serial)
+        if bgr is not None:
+            stamp = now.to_msg()
+            self._publish_raw(serial, bgr, stamp)
+            self._engine.feed_frame(serial, bgr)
+
+        result = self._engine.get_result(serial)
+        if result:
+            header = Header()
+            header.stamp = self.get_clock().now().to_msg()
+            header.frame_id = f'tactile_{serial}'
+            self._publish_results(serial, result, header)
+
+    # ------------------------------------------------------------------
+    # Raw publishing
+    # ------------------------------------------------------------------
+
+    def _publish_raw(self, serial: str, bgr: np.ndarray, stamp):
+        """Publish BGR frame as ROS Image."""
+        pub = self.raw_pubs.get(serial)
+        if pub is None:
+            return
         msg = Image()
         msg.height, msg.width = bgr.shape[0], bgr.shape[1]
         msg.encoding = 'bgr8'
         msg.is_bigendian = False
         msg.step = bgr.shape[1] * 3
         msg.data = np.ascontiguousarray(bgr).tobytes()
-        msg.header.frame_id = f'tactile_{self._serial}'
+        msg.header.frame_id = f'tactile_{serial}'
         msg.header.stamp = stamp
-        self.raw_pub.publish(msg)
+        pub.publish(msg)
 
-    def _process_frame(self, frame: np.ndarray):
-        """Background collection + corruption check + route to processor."""
-        # Corruption check: mx/med > 3.0 = STM32 horizontal tear
-        row_d = np.sum(np.abs(
-            frame[:-1].astype(np.int16) - frame[1:].astype(np.int16)
-        ), axis=(1, 2))
-        med, mx = float(np.median(row_d)), float(np.max(row_d))
-        if med > 0 and mx / med > 3.0:
-            # Corrupt frame — skip, don't use for background or processing
-            return
+    # ------------------------------------------------------------------
+    # Result publishing
+    # ------------------------------------------------------------------
 
-        # Background collection (first BG_COLLECTION_FRAMES clean frames)
-        if not self._bg_done:
-            self._bg_buffer.append(frame)
-            if len(self._bg_buffer) >= BG_COLLECTION_FRAMES:
-                bg_image = np.mean(
-                    self._bg_buffer, axis=0).astype(np.uint8)
-                self.processor.load_background(bg_image)
-                self.processor.start_thread(
-                    outputs=self.outputs,
-                    ppmm=self.ppmm,
-                    **self._depth_kwargs)
-                self._bg_done = True
-                self.get_logger().info(
-                    f'Background collected '
-                    f'({len(self._bg_buffer)} clean frames)')
-            return
-
-        # Route clean frame to processor
-        self.processor.set_input_frame(frame, time.time())
-
-    # --- Message conversion helpers ---
-
-    @staticmethod
-    def _cv2_to_imgmsg(arr: np.ndarray, encoding: str) -> Image:
-        """numpy -> ROS Image message (cv_bridge replacement)."""
-        msg = Image()
-        if arr.ndim == 2:
-            msg.height, msg.width = arr.shape
-        else:
-            msg.height, msg.width, _ = arr.shape
-        msg.encoding = encoding
-        msg.is_bigendian = False
-        step = arr.strides[0]
-        if step <= 0:
-            step = arr.shape[1] * arr.itemsize * (
-                arr.shape[2] if arr.ndim == 3 else 1)
-        msg.step = step
-        msg.data = np.ascontiguousarray(arr).tobytes()
-        return msg
-
-    def create_pointcloud2_msg(
-            self, points, header,
-            colors=None, color_format='rgb_packed', forces=None):
-        """Create PointCloud2 message from numpy point array."""
-        if points.shape[1] != 3:
-            return None
-        n = len(points)
-        fields = [
-            PointField(name='x', offset=0,
-                       datatype=PointField.FLOAT32, count=1),
-            PointField(name='y', offset=4,
-                       datatype=PointField.FLOAT32, count=1),
-            PointField(name='z', offset=8,
-                       datatype=PointField.FLOAT32, count=1),
-        ]
-        columns = [points.astype(np.float32)]
-        if colors is not None:
-            cols = (np.clip(colors, 0.0, 1.0) * 255.0).astype(np.uint8)
-            if color_format == 'rgb_packed':
-                r = cols[:, 0].astype(np.uint32)
-                g = cols[:, 1].astype(np.uint32)
-                b = cols[:, 2].astype(np.uint32)
-                rgb_uint32 = (r << 16) | (g << 8) | b
-                fields.append(PointField(
-                    name='rgb', offset=12,
-                    datatype=PointField.FLOAT32, count=1))
-                columns.append(
-                    rgb_uint32.view(np.float32).reshape(-1, 1))
-                point_step = 16
-            else:
-                fields += [
-                    PointField(
-                        name='r', offset=12,
-                        datatype=PointField.FLOAT32, count=1),
-                    PointField(
-                        name='g', offset=16,
-                        datatype=PointField.FLOAT32, count=1),
-                    PointField(
-                        name='b', offset=20,
-                        datatype=PointField.FLOAT32, count=1),
-                ]
-                columns.append(cols.astype(np.float32))
-                point_step = 24
-        else:
-            point_step = 12
-
-        if forces is not None:
-            offset = point_step
-            fields += [
-                PointField(
-                    name='fx', offset=offset,
-                    datatype=PointField.FLOAT32, count=1),
-                PointField(
-                    name='fy', offset=offset + 4,
-                    datatype=PointField.FLOAT32, count=1),
-                PointField(
-                    name='fz', offset=offset + 8,
-                    datatype=PointField.FLOAT32, count=1),
-            ]
-            columns.append(forces.astype(np.float32))
-            point_step = offset + 12
-
-        combined = np.hstack(columns)
-        msg = PointCloud2()
-        msg.header = header
-        msg.height = 1
-        msg.width = n
-        msg.fields = fields
-        msg.is_bigendian = False
-        msg.point_step = point_step
-        msg.row_step = point_step * n
-        msg.data = combined.tobytes()
-        msg.is_dense = True
-        return msg
-
-    # --- Force field canonicalization ---
-
-    def _canonicalize_force_field(self, result, frame):
-        """Apply force_field scaling and recompute pointcloud colors."""
-        if (result is None or 'force_field' not in result or
-                result['force_field'] is None):
-            return result
-        ff = result['force_field']
-        try:
-            normal_arr = np.asarray(ff['normal']).astype(np.float32)
-            shear_arr = np.asarray(ff['shear']).astype(np.float32)
-        except Exception:
-            return result
-
-        normal_vis = np.clip(normal_arr, 0.0, 1.0)
-        shear_vis = np.clip(shear_arr, -1.0, 1.0)
-
-        if self.force_field_scale != 1.0:
-            s = float(self.force_field_scale)
-            normal_vis = (normal_vis.astype(np.float64) * s).astype(
-                np.float32)
-            shear_vis = (shear_vis.astype(np.float64) * s).astype(
-                np.float32)
-
-        ff['normal'] = normal_vis
-        ff['shear'] = shear_vis
-        result['force_field'] = ff
-
-        # Recompute pointcloud colors/forces
-        if frame is not None:
-            try:
-                pc = result.get('pointcloud')
-                if pc is not None:
-                    force_rgb = force_field_to_rgb(
-                        normal_vis, shear_vis)
-                    th, tw = frame.shape[0], frame.shape[1]
-                    fh, fw = force_rgb.shape[:2]
-                    if (fh, fw) != (th, tw):
-                        force_rgb = cv2.resize(
-                            force_rgb, (tw, th),
-                            interpolation=cv2.INTER_NEAREST)
-                    colors_flat = force_rgb.reshape(-1, 3) / 255.0
-                    mask = result.get('mask')
-                    if (mask is not None
-                            and pc.shape[0] != (th * tw)):
-                        mask_flat = mask.ravel()
-                        if mask_flat.shape[0] == th * tw:
-                            colors_flat = colors_flat[mask_flat]
-                    result['pointcloud_colors'] = colors_flat
-
-                    fx_img = shear_vis[..., 0]
-                    fy_img = shear_vis[..., 1]
-                    fz_img = normal_vis
-                    if (fx_img.shape[0], fx_img.shape[1]) != (th, tw):
-                        fx_img = cv2.resize(
-                            fx_img, (tw, th),
-                            interpolation=cv2.INTER_NEAREST)
-                        fy_img = cv2.resize(
-                            fy_img, (tw, th),
-                            interpolation=cv2.INTER_NEAREST)
-                        fz_img = cv2.resize(
-                            fz_img, (tw, th),
-                            interpolation=cv2.INTER_NEAREST)
-                    fx_flat = fx_img.reshape(-1)
-                    fy_flat = fy_img.reshape(-1)
-                    fz_flat = fz_img.reshape(-1)
-                    if (mask is not None
-                            and pc.shape[0] != (th * tw)):
-                        fx_flat = fx_flat[mask_flat]
-                        fy_flat = fy_flat[mask_flat]
-                        fz_flat = fz_flat[mask_flat]
-                    result['pointcloud_forces'] = np.stack(
-                        [fx_flat, fy_flat, fz_flat], axis=1)
-            except Exception:
-                self.get_logger().warn(
-                    'Failed to recompute pointcloud colors/forces',
-                    throttle_duration_sec=10.0)
-        return result
-
-    # --- Publish loop ---
-
-    def timer_callback(self):
-        """Poll shm for new frame, process it, then publish results."""
-        # 1. Poll shm for new camera frame
-        bgr = self._read_shm_frame()
-        if bgr is not None:
-            # Re-publish raw frame as ROS Image
-            self._publish_raw(bgr, self.get_clock().now().to_msg())
-            # Corruption check + background + feed to processor
-            self._process_frame(bgr)
-
-        # 2. Publish latest processor results
-        result = self.processor.get_latest_result()
-        if not result:
-            return
-
-        header = Header()
-        header.stamp = self.get_clock().now().to_msg()
-        header.frame_id = (
-            f'tactile_{self.get_parameter("serial").value}')
-
+    def _publish_results(
+            self, serial: str, result: dict, header: Header):
+        """Publish all results for one sensor."""
+        pubs = self.output_publishers.get(serial, {})
         for output_name, pub_data in result.items():
-            if output_name not in self.output_publishers:
+            if output_name not in pubs:
                 continue
-            publisher = self.output_publishers[output_name]
+            publisher = pubs[output_name]
             if pub_data is None:
                 continue
 
             if output_name == 'depth':
                 if len(pub_data.shape) == 2:
-                    msg = self._cv2_to_imgmsg(pub_data, encoding='mono8')
+                    msg = self._cv2_to_imgmsg(
+                        pub_data, encoding='mono8')
                     msg.header = header
                     publisher.publish(msg)
 
@@ -517,12 +286,11 @@ class TactileProcessNode(Node):
                         msg.header = header
                         publisher.publish(msg)
 
-                        # viz topic
-                        viz_pub = self.output_publishers.get(
-                            'force_field_viz')
+                        viz_pub = pubs.get('force_field_viz')
                         if viz_pub is not None:
-                            rgb8 = force_field_to_rgb(
-                                normal, shear)
+                            from vistac_sdk.viz_utils import \
+                                force_field_to_rgb
+                            rgb8 = force_field_to_rgb(normal, shear)
                             viz_msg = self._cv2_to_imgmsg(
                                 rgb8, encoding='rgb8')
                             viz_msg.header = header
@@ -540,10 +308,86 @@ class TactileProcessNode(Node):
                         pub_data.get('fz', 0.0))
                     publisher.publish(msg)
 
+    # ------------------------------------------------------------------
+    # Message conversion helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _cv2_to_imgmsg(arr: np.ndarray, encoding: str) -> Image:
+        """numpy -> ROS Image message."""
+        msg = Image()
+        if arr.ndim == 2:
+            msg.height, msg.width = arr.shape
+        else:
+            msg.height, msg.width = arr.shape[0], arr.shape[1]
+        msg.encoding = encoding
+        msg.is_bigendian = False
+        msg.step = arr.shape[1] * arr.dtype.itemsize * (
+            1 if arr.ndim == 2 else arr.shape[2])
+        msg.data = np.ascontiguousarray(arr).tobytes()
+        return msg
+
+    @staticmethod
+    def create_pointcloud2_msg(
+            points: np.ndarray, header: Header,
+            colors: np.ndarray = None,
+            forces: np.ndarray = None) -> PointCloud2:
+        """Create PointCloud2 from point array with optional color/force."""
+        import struct as _struct
+        if points is None or len(points) == 0:
+            return None
+        pts = points.astype(np.float32)
+        n = len(pts)
+        fields = [
+            PointField(name='x', offset=0, datatype=PointField.FLOAT32,
+                       count=1),
+            PointField(name='y', offset=4, datatype=PointField.FLOAT32,
+                       count=1),
+            PointField(name='z', offset=8, datatype=PointField.FLOAT32,
+                       count=1),
+        ]
+        offset = 12
+        has_rgb = colors is not None and len(colors) == n
+        has_f = forces is not None and len(forces) == n
+        if has_rgb:
+            rgb_f32 = np.clip(colors.astype(np.float32), 0.0, 1.0)
+            fields.append(PointField(
+                name='rgb', offset=offset,
+                datatype=PointField.FLOAT32, count=3))
+            offset += 12
+        if has_f:
+            f_f32 = forces.astype(np.float32)
+            fields.append(PointField(
+                name='force', offset=offset,
+                datatype=PointField.FLOAT32, count=3))
+            offset += 12
+
+        data_list = [pts.tobytes()]
+        if has_rgb:
+            data_list.append(rgb_f32.tobytes())
+        if has_f:
+            data_list.append(f_f32.tobytes())
+
+        msg = PointCloud2()
+        msg.header = header
+        msg.height = 1
+        msg.width = n
+        msg.fields = fields
+        msg.is_bigendian = False
+        msg.point_step = offset
+        msg.row_step = offset * n
+        msg.is_dense = True
+        msg.data = b''.join(data_list)
+        return msg
+
+    # ------------------------------------------------------------------
+    # Cleanup
+    # ------------------------------------------------------------------
+
     def destroy_node(self):
-        self.processor.stop_thread()
-        if hasattr(self, '_shm') and self._shm is not None:
-            self._shm.close()
+        self._engine.shutdown()
+        self.raw_pubs.clear()
+        self.output_publishers.clear()
         super().destroy_node()
 
 

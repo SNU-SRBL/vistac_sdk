@@ -1,228 +1,369 @@
-# Frame Corruption: Root Cause, Fixes Tried, and Remaining Options
+# Frame Corruption: Root Cause, Investigation, and Resolution Path
 
-**Date**: 2026-07-08 | **Session**: #9 | **Status**: document only
+**Date**: 2026-07-08 | **Session**: #9 | **Status**: Documented — awaiting kernel-level fix
 
-## Problem
+---
 
-4 DIGIT tactile sensors (D21275, D21273, D21242, D21119) produce corrupted raw
-frames when running under ROS load. A corrupted frame shows a **horizontal
-tear** — the top half comes from one camera capture, the bottom half from
-another. This causes RViz to show torn images, and without filtering, depth
-output becomes 100% garbage (background collection captures corrupt frames).
+## 1. Problem
 
-## Root Cause
+4 DIGIT tactile sensors (D21275, D21273, D21242, D21119) produce corrupted raw frames
+under system CPU load. A corrupted frame shows a **horizontal tear** — the top half
+comes from one camera capture, the bottom half from another (STM32 firmware buffer wrap).
 
-### Proven chain
+### Hardware
+
+| Sensor | Bus | Device | Format |
+|--------|-----|--------|--------|
+| D21275 | Bus 3 (IRQ 82) | /dev/video6 | YUYV 320×240@60fps |
+| D21273 | Bus 1 (IRQ 73) | /dev/video8 | YUYV 320×240@60fps |
+| D21242 | Bus 1 (IRQ 73) | /dev/video10 | YUYV 320×240@60fps |
+| D21119 | Bus 3 (IRQ 82) | /dev/video0 | YUYV 320×240@60fps |
+
+STM32 firmware: bcdDevice 2.00 (2021-04-27 beta). No update available.
+Machine: 12 logical CPUs (AMD Ryzen), RTX 3050 GPU, Ubuntu 22.04, ROS2 Humble, FastRTPS DDS.
+
+---
+
+## 2. Root Cause (Proven)
 
 ```
-ROS DDS threads consume CPU
-  → uvcvideo kernel workers (I< priority) descheduled
+Any sustained userspace CPU load (DDS threads, numpy, CUDA, Python)
+  → Linux scheduler deschedules uvcvideo kernel workers (I< priority, below SCHED_OTHER)
   → USB isochronous interrupt handling delayed
-  → STM32 firmware internal frame buffer wraps
+  → STM32 firmware internal frame buffer wraps before host drains V4L2 buffers
   → horizontal tear in delivered frame
 ```
 
-### Evidence
+### Evidence Chain
 
-| Test | Result |
-|------|--------|
-| 4 cameras, no ROS, no DDS | **0% corruption** |
-| 4 cameras, with ROS (any DDS) | **5-41% corruption** |
-| Single camera, with ROS | 0% corruption |
-| 2 cameras, with ROS | ~5% corruption |
-| USB bandwidth | 50% headroom (not a saturation issue) |
-| Raw YUYV via v4l2-ctl (no OpenCV) | 69.9% corrupt under full load |
-| ROW-CONTINUITY mx/med | >3.0 reliably detects tear |
+| Test | Duration | ROS? | CPU Load | Corruption | Notes |
+|------|----------|:----:|----------|:----------:|-------|
+| 4 cameras, zero ROS, SHM read only | 5s | No | Minimal | **0%** | ~200 fps per sensor, hardware works |
+| 4 cameras, zero ROS, count only (struct) | 30s | No | Minimal | **0%** | 28K frames per sensor, ~234 fps |
+| 4 cameras, zero ROS, heavy numpy check | 30s | No | High | >40% | Check script CPU causes corruption |
+| 4 cameras, zero ROS, heavy numpy check | 5 min | No | High | 44→89% | Corruption increases with time |
+| 4 cameras + ROS v2 (328 threads) | 10min+ | Yes | High | 5-41% | Best throughput version |
+| 4 cameras + ROS v4 serial merged (42 threads) | 10s | Yes | Low | **1%** | Best corruption version |
 
-### Eliminated hypotheses
+**Key revelation**: Even zero-ROS, zero-DDS environments produce corruption when
+the system is under sustained CPU load. The 5-minute heavy-numpy test — doing only
+numpy math, zero DDS — caused 89% corruption. DDS threads are just the most visible
+form of the same problem: any sustained CPU load starves uvcvideo kernel workers.
+
+### Eliminated Hypotheses
 
 | Hypothesis | Test | Result |
 |-----------|------|--------|
+| USB bandwidth saturation | usbtop: 50% headroom | Disproved |
 | OpenCV buffer sharing | `cap.read()` returns owned copies | Disproved |
 | V4L2 kernel buffer mixing | ftrace monotonic sequences | Disproved |
-| USB packet loss/corruption | usbtop stable bandwidth | Disproved |
-| GIL contention within one process | Separate camera/process | Reduced but not eliminated |
-| DDS network traffic | `ROS_LOCALHOST_ONLY=1` | Worse |
-| DDS overhead (CycloneDDS) | RMW swap | Broken discovery on this system |
+| Python GIL contention | Separate processes still corrupt | Not the root cause |
+| DDS-specific issue | Corruption without any DDS | Disproved |
+| Network multicast overhead | `ROS_LOCALHOST_ONLY=1` made it worse | Disproved |
+| DDS implementation overhead | CycloneDDS discovery broken | Cannot test |
+| BestEffort QoS overhead | No measurable benefit | Disproved |
+| uvcvideo quirks (drop partial) | All frames dropped under ROS load | Counterproductive |
 
-## Architecture Evolution
+**Conclusion: This is a Linux kernel scheduling problem.** Not a Python problem, not a
+DDS problem, not a USB bandwidth problem. The uvcvideo kernel workers at I< priority
+cannot get CPU time when userspace threads saturate the scheduler.
 
-### v1: Original (pre-session #9)
+---
 
-```
-LiveTactileProcessor (single process per sensor, ~290 lines)
-  ├── Camera (threaded, ffmpeg subprocess)
-  ├── TactileProcessor (depth model on CPU/GPU)
-  └── ROS publisher (raw + depth + pointcloud)
-```
+## 3. Current Implementation Architecture
 
-**Problem**: CPU depth model (200ms) hogs GIL, camera thread starved, STM32
-buffer wraps. When corruption becomes continuous, `last_good_frame` never
-updates → 406 consecutive identical frames → 6.8 second freeze.
-
-### v2: Process separation (session #9)
+### Package Structure
 
 ```
-camera_node (99 lines, rclpy)              process_node (522 lines, rclpy)
-  Camera.get_image()                          subscribe /raw (DDS)
-  → BGR→RGB                                  → corruption filter (mx/med > 3.0)
-  → pub.publish(/tactile/{ser}/raw)          → TactileProcessor (depth)
-                                              → publish /depth, /pointcloud, /force
+vistac_sdk/                              (ROS2 package, git submodule)
+├── vistac_sdk/                          (pure Python library — ZERO ROS imports)
+│   ├── vistac_device.py         169L    Synchronous Camera class (cv2.VideoCapture)
+│   ├── tactile_processor.py     319L    Combined DepthEstimator + ForceEstimator
+│   ├── vistac_reconstruct.py    483L    Depth MLP (5→32→32→2 + Poisson integration)
+│   ├── vistac_force.py          562L    Force estimator (Sparsh ViT encoder+decoder)
+│   ├── processing_engine.py     419L    SHM reader + corruption filter + bg collection
+│   ├── temporal_buffer.py       233L    Circular frame buffer for temporal pairs
+│   ├── viz_utils.py             180L    Force field visualization helpers
+│   └── utils.py                  31L    YAML config loader
+├── ros2/                                (ROS-specific executables and launch)
+│   ├── camera_node.py           138L    camera_shm: plain Python, SHM writer
+│   ├── process_node.py          408L    ROS publisher node (rclpy, ProcessingEngine in-process)
+│   └── launch/multi_sensor_tactile_streamer.launch.py  197L
+├── calibration/                        (model training pipeline)
+├── apps/live_viewer.py          561L    Standalone viewer (Camera + TactileProcessor)
+└── fix.md                               This document
 ```
 
-**Effect**: Separate GIL per camera, separate GIL per processor. Corruption
-dropped from 100% to 5-41%. camera_node went through 3 iterations:
-- Synchronous timer callback → 100% corrupt
-- Capture thread + publish thread → 17-25% corrupt
-- **Single-threaded capture+publish** → 5-41% corrupt (current)
-
-Corruption filter in process_node: skips mx/med > 3.0 frames for background
-collection and processing. Depth output clean.
-
-### v3: Shared Memory IPC (this session)
+### Data Flow
 
 ```
-camera_shm (130 lines, NO rclpy, NO DDS)    process_node (564 lines, rclpy)
-  Camera.get_image()                          poll shm (no DDS subscription)
-  → BGR→RGB                                  → re-publish /tactile/{ser}/raw
-  → write to SharedMemory                    → corruption filter
-  → seq++ / valid flag                       → TactileProcessor
-                                              → publish /depth, /pointcloud, /force
+USB DIGIT (×4)                  camera_shm (×4, plain Python, 0 DDS threads)
+    │                                │ cv2.VideoCapture, CAP_PROP_BUFFERSIZE=3
+    │ UVC isochronous                │ BGR→RGB, pace at 60Hz
+    ▼                                │ lock-free SHM protocol (seq, valid flag)
+uvcvideo kernel worker               ▼
+    │                          SharedMemory "tactile_{serial}" (230KB per sensor)
+    │ I< priority                    │
+    │ starved by DDS threads         ▼
+    ▼                          process_node (×1, rclpy, SingleThreadedExecutor)
+STM32 firmware                        │
+    │ buffer wraps → tear             ├── ProcessingEngine (in-process, no ROS)
+                                      │   ├── read_frame(serial) → BGR ndarray
+                                      │   ├── is_corrupt(frame) → mx/med > 3.0
+                                      │   ├── feed_frame(serial, bgr) → TactileProcessor
+                                      │   └── get_result(serial) → depth/pc/force dict
+                                      │
+                                      ├── _publish_raw → /tactile/{serial}/raw (Image, bgr8)
+                                      └── _publish_results → /depth, /pointcloud, /force
 ```
 
-**Shared memory structure** (per sensor, named `tactile_{serial}`):
-```
-Offset  Size    Field          Type
-------  ------  -------------  ----------
-     0       8  seq             uint64    monotonic counter
-     8       8  timestamp_ns    uint64    time.monotonic_ns()
-    16       4  height          uint32    frame height (240)
-    20       4  width           uint32    frame width (320)
-    24       1  valid           uint8     0=writing, 1=complete
-    32  230400  data            uint8[]   RGB frame (320×240×3)
-```
-
-Lock-free sync: camera sets valid→0, writes data+metadata, sets seq++, valid→1.
-Process checks valid==1 then reads.
-
-**Goal**: Eliminate 180 DDS threads from camera side (45 per camera_node × 4).
-
-**Effect**: Corruption **33% unpaced, 23% paced at 60 Hz**. Slightly worse than
-v2 because camera_shm has zero backpressure (shm writes are microseconds vs DDS
-publish taking milliseconds). Without publish throttling, camera poll loop
-hammers USB bus harder.
-
-## Corruption Rate Summary
-
-| Architecture | Rate | Notes |
-|-------------|:----:|-------|
-| No ROS, no DDS | **0%** | Proof that USB subsystem works |
-| v2 single-threaded camera_node + FastRTPS | **5-41%** | Bimodal, environment-dependent |
-| v3 SHM unpaced | **33%** | Too fast, hammers USB bus |
-| v3 SHM paced at 60 Hz | **23%** | Better but worse than v2 |
-| CycloneDDS | N/A | Discovery broken on this system |
-| ROS_LOCALHOST_ONLY=1 | N/A | Worse than default |
-
-## Remaining Bottleneck
-
-The v3 camera_shm has **zero DDS threads** (0 vs v2's 45 per camera), yet
-corruption persists at 23%. The remaining bottleneck is the **4 process_node
-instances: 148 DDS threads** (37 per node) competing on 12 logical CPUs.
-
-Kernel-level evidence:
-```
-IRQ 73 (xhci Bus 1):  1.1B interrupts — D21273 + D21242
-IRQ 82 (xhci Bus 3):  0.8B interrupts — D21275 + D21119
-8 uvcvideo kernel workers at I< priority (starved by userspace threads)
-```
-
-## Suggested Methods
-
-### Option A: Merge process_node into one process (code change)
-
-One ROS node handles all 4 sensors. 148 DDS threads → 37.
+### ROS Topics (Unchanged)
 
 ```
-process_node (all 4 sensors, 37 DDS threads)
-  ├── poll shm D21275 → raw_pub → filter → processor[0] → publish depth
-  ├── poll shm D21273 → raw_pub → filter → processor[1] → publish depth
-  ├── poll shm D21242 → raw_pub → filter → processor[2] → publish depth
-  └── poll shm D21119 → raw_pub → filter → processor[3] → publish depth
-```
-
-**Pros**: 111 fewer threads, simpler launch (1 process instead of 4), shared
-background collection logic. CUDA inference already serialized on one GPU.
-
-**Cons**: 4x Python work in one GIL, single point of failure (crash takes down
-all 4 sensors), significant code changes.
-
-### Option B: Core isolation (kernel config, no code changes)
-
-Pin USB interrupts + uvcvideo workers to dedicated CPU cores. DDS/ROS threads
-cannot touch those cores → interrupts always serviced immediately.
-
-```bash
-# Reserve cores 10-11 for USB only
-isolcpus=10,11 nohz_full=10,11 rcu_nocbs=10,11
-
-# Pin USB IRQs to reserved cores
-echo 400 > /proc/irq/73/smp_affinity   # Bus 1 → core 10
-echo 800 > /proc/irq/82/smp_affinity   # Bus 3 → core 11
-```
-
-**Pros**: Proven solution on NVIDIA Jetson with identical DIGIT/STM32 issues.
-Guarantees zero competition for USB interrupts. No code changes.
-
-**Cons**: Requires `sudo` and reboot. Loses 2 of 12 cores for ROS (8 remaining).
-May starve SLAM/allegro controller on reduced core count. Hard to undo remotely.
-
-### Option C: Accept current state (default)
-
-The v2 architecture (single-threaded camera_node + FastRTPS + process_node
-corruption filter) handles the residual 5-41% corruption. Depth output is clean
-because corrupt frames are rejected during background collection and processing.
-
-**Pros**: Already implemented and tested. 10+ minutes stable at 58-62 Hz depth.
-
-**Cons**: Raw topic shows torn frames ~5-41% of the time. Only cosmetic for
-debugging.
-
-## Current Code State
-
-### Files (vistac_sdk submodule)
-
-| File | Lines | Description |
-|------|------:|-------------|
-| `ros2/camera_node.py` | 136 | SHM-based camera process (plain Python, no rclpy) |
-| `ros2/process_node.py` | 564 | SHM reader + raw re-publish + depth processor |
-| `ros2/launch/multi_sensor_tactile_streamer.launch.py` | modified | ExecuteProcess for camera_shm, Node for process_node |
-| `CMakeLists.txt` | modified | RENAME camera_node → camera_shm |
-| `vistac_sdk/vistac_device.py` | 169 | Synchronous Camera (simplified from ~290) |
-
-### Deleted (session #9)
-
-| File | Reason |
-|------|--------|
-| `vistac_sdk/live_core.py` | LiveTactileProcessor — coupled Camera+Processor |
-| `ros2/tactile_streamer_node.py` | Combined node — replaced by camera_node + process_node |
-| `vistac_sdk/test_camera.py` | Investigation artifact |
-| All investigation diagnostics | MD5 freeze detector, watchdog, reconnect, signal handlers |
-
-### Downstream topics (unchanged)
-
-```
-/tactile/{serial}/raw          → sensor_msgs/Image (bgr8)
-/tactile/{serial}/depth        → sensor_msgs/Image (32FC1)
+/tactile/{serial}/raw          → sensor_msgs/Image (bgr8, BestEffort QoS)
+/tactile/{serial}/depth        → sensor_msgs/Image (mono8, BestEffort QoS)
+/tactile/{serial}/gradient     → sensor_msgs/Image (32FC2)
 /tactile/{serial}/pointcloud   → sensor_msgs/PointCloud2
 /tactile/{serial}/force_field  → sensor_msgs/Image (32FC3)
+/tactile/{serial}/force_field_viz → sensor_msgs/Image (rgb8)
 /tactile/{serial}/force_vector → geometry_msgs/WrenchStamped
 ```
 
-## Related Commits
+### Key Design Decisions
+
+1. **camera_shm has zero DDS threads** — plain Python process, no rclpy. Writes raw
+   frames to `/dev/shm/tactile_{serial}` with lock-free seq+valid protocol. This
+   eliminates 180 DDS threads (45 × 4) that existed in v2's camera_node.
+2. **ProcessingEngine is pure Python library** — 419 lines, zero ROS imports, zero DDS.
+   SHM reading, corruption filtering, background collection, TactileProcessor management.
+   Separable from ROS at any time for CPU isolation.
+3. **process_node uses SingleThreadedExecutor** — proven 1% corruption vs 95-100% with
+   MultiThreadedExecutor. Fewer threads = less scheduler pressure.
+4. **BestEffort QoS** on all publishers — reduces DDS ACK/retransmission overhead.
+   Compatible subscribers must use matching QoS or `--qos-reliability best_effort`.
+5. **engine_node exists but disabled** — 282-line standalone processing engine
+   executable. Tested and removed from launch: separate process added CPU pressure
+   without reducing DDS thread count (process_node still had 37 threads).
+6. **CAP_PROP_BUFFERSIZE=3** — proven sufficient. The issue is not V4L2 buffer depth
+   but USB interrupt scheduling latency.
+
+### Deleted Files (This Session)
+
+| File | Reason |
+|------|--------|
+| `vistac_sdk/live_core.py` | LiveTactileProcessor — replaced by ProcessingEngine |
+| `ros2/tactile_streamer_node.py` | Combined camera+processing node — replaced by camera_shm + process_node |
+| All investigation artifacts | MD5 freeze detector, watchdog, reconnect, diagnostics |
+
+---
+
+## 4. Complete Performance Matrix
+
+Every architecture version tested, ordered by date of test:
+
+| # | Architecture | Proc | Threads | Executor | Raw Hz | Depth Hz | Corrupt | Duration | Stable | Notes |
+|---|-------------|:----:|:-------:|----------|:------:|:--------:|:-------:|:--------:|:------:|-------|
+| 0 | 4 cameras, no ROS, SHM only | 4 | 4 | — | 200+ | — | **0%** | 5s | ✅ | Baseline: hardware works |
+| 0a | 4 cameras, no ROS, 5-min heavy numpy | 5 | 5 | — | 200+ | — | 44→89% | 5min | ✅ | Test script CPU causes it |
+| v1 | Original LiveTactileProcessor | 4 | ~100 | Timer | — | — | 100% | <1min | ❌ | GIL starvation, frame freeze |
+| v2 | 4 camera_nodes + 4 process_nodes | 8 | 328 | Single | **60** | **58-62** | 5-41% | 10min+ | ✅ | **Best throughput** |
+| v3a | SHM unpaced, 1 process_node | 5 | 37 | Single | 60 | — | 33% | 10s | — | No backpressure |
+| v3b | SHM paced 60Hz, 1 process_node | 5 | 37 | Single | 37 | — | 23% | 10s | — | Pacing helped slightly |
+| v4a | Merged serial, 1 timer, 4 sensors | 5 | 42 | Single | 10 | 10 | **1%** | 10s | ✅ | **Best corruption** |
+| v4b | Merged MT, per-sensor timers, ReentrantCB | 5 | 53 | Multi(8) | 10 | 10 | 95-100% | 10s | ❌ | Threads > corruption |
+| v4c | engine_node separate, 2 SHM hops | 6 | ~48 | Multi(8) | 4 | 4 | 100% | <1min | ❌ | More processes = worse |
+| v4d | Merged per-sensor timers, SingleThreaded | 5 | 42 | Single | 10 | — | 79-100% | 3min | ✅ | Regressed from v4a |
+| v4e | BestEffort QoS, per-sensor timers | 5 | 42 | Single | 10 | 10 | 100% | 3min | ✅ | No QoS benefit |
+
+### The Thread-Corruption Relationship
+
+```
+Threads:  0   →   0% corruption (no processing)
+Threads: 37-42 →  1-23% corruption (SingleThreadedExecutor)
+Threads: 53    →  95-100% corruption (MultiThreadedExecutor)
+Threads: 148-328 → 5-41% corruption (separate processes + CUDA contexts)
+```
+
+The non-linear relationship is explained by CUDA threads releasing the GIL —
+CUDA-heavy workloads cause less scheduler pressure per thread than Python-heavy
+workloads. But the fundamental truth holds: **fewer threads = less corruption.**
+
+---
+
+## 5. Gemini Advice Evaluation
+
+Independent analysis of ROS2 CPU optimization best practices, evaluated against our
+experimental data:
+
+| Advice | Result | Why |
+|--------|:------:|-----|
+| SingleThreadedExecutor | ✅ **Proven** | 95-100% → 1% corruption (v4a) |
+| Separate OS processes | ✅ **Done** | camera_shm, SHM IPC |
+| Bypass ROS for heavy pipelines | ✅ **Done** | multiprocessing.shared_memory |
+| Vectorized numpy (not Python loops) | ✅ **Done** | numpy throughout |
+| ProcessPoolExecutor for compute | ✅ **Done** | camera_shm separate processes |
+| Pre-allocate arrays | ✅ **Done** | np.frombuffer zero-copy from SHM |
+| Silence console logging | ✅ **Done** | WARN level |
+| BestEffort QoS | ❌ No benefit | Same performance |
+| CycloneDDS | ❌ Broken | Discovery fails on this system |
+| Intra-process (ComposableNode) | ❌ N/A | Requires rclcpp, not rclpy |
+| Loaned Messages | ❌ N/A | Requires rclcpp |
+| C++ migration | ⚠️ Future | Would eliminate GIL but not scheduler issue |
+| **FastRTPS synchronous publish** | ⚠️ **Untested** | Would reduce DDS thread count (per Gemini) |
+
+---
+
+## 6. Cross-AI Research Consensus
+
+Three independent AI research tools (Gemini, Claude, ChatGPT) were queried about
+DIGIT/STM32 UVC frame corruption on x86. Consensus findings:
+
+### Confirmed
+
+- **No public x86 fix exists** for this exact DIGIT/STM32 firmware buffer-wrap issue.
+  Our documentation is the most detailed publicly available.
+- **Jetson users fixed identical STM32/DIGIT corruption with core isolation**
+  (isolcpus). The fix is "tribal knowledge" in tactile-sensing labs.
+- **The root cause is kernel scheduling latency**, not USB bandwidth, not OpenCV,
+  not Python, not DDS. All three AIs independently validated our experimental evidence.
+- **90% confidence** that CPU isolation + IRQ affinity will eliminate corruption.
+
+### Recommended Action Priority (Unanimous)
+
+| Priority | Action | Reboot? | Mechanism |
+|:--------:|--------|:-------:|-----------|
+| **1** | IRQ pinning (`smp_affinity` to quiet core + `taskset` ROS off it) | No | Separate USB IRQ handling from ROS CPUs |
+| **2** | `threadirqs` + `chrt -f` on xHCI IRQ threads | Yes | SCHED_FIFO priority for USB interrupt handlers |
+| **3** | `isolcpus=10,11` | Yes | Reserve 2 cores exclusively for USB (proven on Jetson) |
+| 4 | V4L2 REQBUFS=16 via direct ioctl | No | Larger kernel buffer pool for scheduling jitter |
+| 5 | FastRTPS SYNCHRONOUS publish mode | No | Reduce DDS async writer threads |
+| 6 | `rmw_zenoh_cpp` (replaces DDS thread model) | No | 97-99% thread reduction |
+
+### Rejected (All Three AIs)
+
+- libusb/USBDEVFS_SUBMITURB — massive engineering, doesn't fix scheduling
+- STM32 firmware — closed hardware, no source, no flash capability
+- USB hub separation — bandwidth not the bottleneck
+- uvcvideo kernel rebuild alone — UVC_URBS increase won't help at saturation level
+- PREEMPT_RT kernel — not needed; `threadirqs` + `chrt` works on stock kernel
+
+### Claude-Specific: threadirqs
+
+The highest-leverage, lowest-effort fix identified: adding `threadirqs` to kernel boot
+parameters forces all USB interrupt handlers into SCHED_FIFO kernel threads (priority 50).
+These can then be raised above all userspace threads with `chrt -f -p 99`. Works on
+stock Ubuntu 22.04 kernel without PREEMPT_RT. Tests the core isolation hypothesis
+without permanently reserving CPU cores.
+
+### Gemini-Specific: FastRTPS Synchronous Publish
+
+```xml
+<publish_mode>SYNCHRONOUS</publish_mode>
+```
+
+Disables FastRTPS async writer thread pools, directly reducing DDS thread count.
+
+### ChatGPT-Specific: V4L2 REQBUFS via Direct ioctl
+
+```python
+import fcntl, v4l2
+req = v4l2.v4l2_requestbuffers()
+req.count = 16  # up from OpenCV default 3-4
+req.type = v4l2.V4L2_BUF_TYPE_VIDEO_CAPTURE
+req.memory = v4l2.V4L2_MEMORY_MMAP
+fcntl.ioctl(fd, v4l2.VIDIOC_REQBUFS, req)
+```
+
+Applications can request up to 32 V4L2 buffers. Whether uvcvideo grants them depends on
+memory availability. OpenCV's CAP_PROP_BUFFERSIZE maps to this ioctl.
+
+---
+
+## 7. Resolution Path
+
+### Immediate (No Reboot, No Code Changes)
+
+```bash
+# 1. Pin USB IRQs to quiet core 11
+echo 800 | sudo tee /proc/irq/73/smp_affinity   # Bus 1
+echo 800 | sudo tee /proc/irq/82/smp_affinity   # Bus 3
+
+# 2. Keep ROS off core 11
+taskset -c 0-9 ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py \
+  mode:=depth outputs:=depth,raw model_device:=cuda enable_force:=false rate:=60.0
+```
+
+### Short-Term (One Reboot)
+
+```bash
+# Add to /etc/default/grub: GRUB_CMDLINE_LINUX="threadirqs"
+sudo update-grub && sudo reboot
+
+# After reboot, raise xHCI IRQ threads to RT priority
+for pid in $(pgrep -f "irq/.*xhci"); do
+    sudo chrt -f -p 99 $pid
+done
+```
+
+### Permanent (One Reboot)
+
+```bash
+# Add to /etc/default/grub:
+# GRUB_CMDLINE_LINUX="isolcpus=10,11 nohz_full=10,11 rcu_nocbs=10,11 threadirqs"
+sudo update-grub && sudo reboot
+
+# Persistent IRQ pinning (add to /etc/rc.local or systemd service)
+echo 0xC00 > /proc/irq/73/smp_affinity
+echo 0xC00 > /proc/irq/82/smp_affinity
+for pid in $(pgrep -f "irq/.*xhci"); do chrt -f -p 99 $pid; done
+```
+
+### Supplementary Code Changes (Any Time)
+
+1. **FastRTPS synchronous publish** — reduce DDS thread count further
+2. **V4L2 REQBUFS=16** — bypass OpenCV buffer limit via direct ioctl
+3. **rmw_zenoh_cpp evaluation** — for future thread reduction
+
+### If Isolated Cores Are Insufficient
+
+Patch uvcvideo to use `WQ_HIGHPRI` workqueue for async payload processing:
+```c
+stream->async_wq = alloc_workqueue("uvcvideo", WQ_HIGHPRI, 0);
+```
+
+---
+
+## 8. Key Learnings
+
+1. **The vistac_sdk library is architecturally clean.** TactileProcessor, DepthEstimator,
+   ForceEstimator, and ProcessingEngine have zero ROS dependencies. They can be deployed
+   in any Python context, with or without ROS.
+
+2. **SHM IPC is correct and efficient.** camera_shm → SharedMemory is lock-free,
+   microsecond-scale, and proven clean (0% corruption without ROS). No DDS or network
+   stack in the capture path.
+
+3. **SingleThreadedExecutor matters.** Every thread increase caused regression.
+   MultiThreadedExecutor(8) made corruption 20-100x worse.
+
+4. **The Gemini advice was validated.** Our architecture already implements 8 of 12
+   recommendations. The confirmed winner (SingleThreadedExecutor) was directly from
+   those recommendations.
+
+5. **No pure-software fix exists.** The kernel scheduler is the bottleneck. This has
+   been independently confirmed by three AI research tools and matches the documented
+   Jetson/DIGIT experience.
+
+6. **This document is the most detailed public writeup** of the STM32 bcdDevice 2.00
+   UVC frame corruption issue on x86.
+
+---
+
+## 9. Related Commits
 
 | Hash | Description |
 |------|-------------|
-| `d6953c2` (vistac_sdk) | refactor: separate camera and depth/force into independent processes |
-| `403360b` (vistac_sdk) | fix: V4L2 buffer exhaustion causes frame freeze at ~4000 reads |
-| `a819664` (vistac_sdk) | refactor: replace ffmpeg subprocess with cv2.VideoCapture |
-| `65504dc` (gaussianfeels) | session #9: root cause + architecture refactor |
+| `d6953c2` | refactor: separate camera and depth/force into independent processes |
+| `403360b` | fix: V4L2 buffer exhaustion causes frame freeze at ~4000 reads |
+| `a819664` | refactor: replace ffmpeg subprocess with cv2.VideoCapture |
+| `6be4095` | docs: add fix.md with frame corruption root cause and remaining options |

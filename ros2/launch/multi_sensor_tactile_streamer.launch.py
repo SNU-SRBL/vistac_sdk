@@ -68,10 +68,9 @@ def launch_setup(context, *args, **kwargs):
     if not sensors:
         sensors = ["D21275", "D21273", "D21242", "D21119"]
 
-    # Path to camera_shm executable (installed by CMakeLists)
-    camera_shm_exe = os.path.join(
-        get_package_prefix('vistac_sdk'),
-        'lib', 'vistac_sdk', 'camera_shm')
+    # Path to executables
+    pkg_prefix = get_package_prefix('vistac_sdk')
+    camera_shm_exe = os.path.join(pkg_prefix, 'lib', 'vistac_sdk', 'camera_shm')
 
     nodes = []
     for serial in sensors:
@@ -83,37 +82,37 @@ def launch_setup(context, *args, **kwargs):
             output="screen",
         ))
 
-        # --- DEPTH NODE (polls shm, runs depth/force, publishes) ---
-        depth_params = {
-            "serial": serial,
-            "sensors_root": sensors_root,
-            "mode": mode,
-            "contact_mode": contact_mode,
-            "model_device": model_device,
-            "use_mask": use_mask,
-            "refine_mask": refine_mask,
-            "relative": relative,
-            "relative_scale": 1.0,
-            "mask_only_pointcloud": mask_only_pointcloud,
-            "color_dist_threshold": 15,
-            "height_threshold": height_threshold,
-            "rate": rate,
-            "enable_force": enable_force,
-            "temporal_stride": temporal_stride,
-            "force_field_scale": force_field_scale,
-            "force_field_baseline": force_field_baseline,
-            "point_sample_mm": point_sample_mm,
-        }
-        if outputs:
-            depth_params["outputs"] = outputs
+    # --- PUBLISHER NODE (rclpy, ProcessingEngine in-process) ---
+    process_params = {
+        "serials": sensors,
+        "sensors_root": sensors_root,
+        "mode": mode,
+        "contact_mode": contact_mode,
+        "model_device": model_device,
+        "use_mask": use_mask,
+        "refine_mask": refine_mask,
+        "relative": relative,
+        "relative_scale": 1.0,
+        "mask_only_pointcloud": mask_only_pointcloud,
+        "color_dist_threshold": 15,
+        "height_threshold": height_threshold,
+        "rate": rate,
+        "enable_force": enable_force,
+        "temporal_stride": temporal_stride,
+        "force_field_scale": force_field_scale,
+        "force_field_baseline": force_field_baseline,
+        "point_sample_mm": point_sample_mm,
+    }
+    if outputs:
+        process_params["outputs"] = outputs
 
-        nodes.append(Node(
-            package="vistac_sdk",
-            executable="process_node",
-            name=f"process_{serial}",
-            output="screen",
-            parameters=[depth_params],
-        ))
+    nodes.append(Node(
+        package="vistac_sdk",
+        executable="process_node",
+        name="tactile_process_node",
+        output="screen",
+        parameters=[process_params],
+    ))
 
     return nodes
 
