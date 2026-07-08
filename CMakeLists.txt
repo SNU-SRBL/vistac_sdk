@@ -13,11 +13,12 @@ find_package(rclpy REQUIRED)
 # Install Python modules
 ament_python_install_package(${PROJECT_NAME})
 
-# Install Python executables (camera_node + process_node = separated architecture)
+# Install Python executables (camera_shm + process_node = shm IPC architecture)
+# camera_shm: plain Python, writes to SharedMemory (no rclpy)
 install(PROGRAMS
   ros2/camera_node.py
   DESTINATION lib/${PROJECT_NAME}
-  RENAME camera_node
+  RENAME camera_shm
 )
 
 install(PROGRAMS

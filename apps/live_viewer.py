@@ -122,7 +122,7 @@ def run_live_viewer(
     ppmm = config["ppmm"]
     sdk_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-    model_path = os.path.join(sdk_root, "models", "nnmodel.pth")
+    model_path = os.path.join(sensors_root, serial, "model", "nnmodel.pth")
     force_encoder_path = os.path.join(sdk_root, "models", "sparsh_dino_base_encoder.ckpt")
     force_decoder_path = os.path.join(sdk_root, "models", "sparsh_digit_forcefield_decoder.pth")
 
@@ -148,13 +148,22 @@ def run_live_viewer(
     # --- Background collection ---
     print("Collecting background...")
     bg_images = []
-    for _ in range(BG_COLLECTION_FRAMES):
+    for i in range(BG_COLLECTION_FRAMES):
         time.sleep(BG_COLLECTION_DELAY_SEC)
+        print(f"  bg frame {i+1}/{BG_COLLECTION_FRAMES}...", end="", flush=True)
         frame = camera.get_image()
-        while frame is None:
+        retries = 0
+        while frame is None and retries < 500:
             time.sleep(CAMERA_POLL_INTERVAL_SEC)
             frame = camera.get_image()
+            retries += 1
+            if retries % 100 == 0:
+                print(f"({retries})", end="", flush=True)
+        if frame is None:
+            print(f" FAILED after {retries} retries")
+            continue
         bg_images.append(frame)
+        print(f" ok shape={frame.shape}")
     bg_image = np.mean(bg_images, axis=0).astype(np.uint8)
 
     depth_kwargs = {

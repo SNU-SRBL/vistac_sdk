@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Process node: subscribes raw camera images, runs TactileProcessor, publishes depth/pointcloud/force.
+"""Process node: reads raw camera frames from shared memory, runs TactileProcessor, publishes depth/pointcloud/force.
 
 Runs in its own process (separate GIL from camera node).
-Subscribes to /tactile/{serial}/raw published by camera_node.
+Reads frames from shared memory (written by camera_shm), re-publishes
+/tactile/{serial}/raw, then runs depth/force estimation.
 """
 
 import rclpy
@@ -12,11 +13,12 @@ from rcl_interfaces.msg import ParameterDescriptor, ParameterType
 from sensor_msgs.msg import Image, PointCloud2, PointField
 from geometry_msgs.msg import WrenchStamped
 from std_msgs.msg import Header
-from cv_bridge import CvBridge
 import cv2
 import numpy as np
 import pathlib
 import time
+
+from multiprocessing import shared_memory
 
 from vistac_sdk.tactile_processor import TactileProcessor
 from vistac_sdk.utils import load_config
@@ -28,10 +30,14 @@ BG_COLLECTION_DELAY_SEC = 0.2
 
 
 class TactileProcessNode(Node):
-    """Subscribes to /tactile/{serial}/raw, runs depth/force estimation,
-    and publishes results (depth, pointcloud, force_field, force_vector).
+    """Reads raw frames from shared memory, runs depth/force estimation,
+    and publishes results (raw, depth, pointcloud, force_field, force_vector).
+
+    Raw frames arrive via shared memory from camera_shm process, then are
+    re-published as /tactile/{serial}/raw for debugging/recording.
 
     Topics (published):
+      /tactile/{serial}/raw       (re-published from shm)
       /tactile/{serial}/depth
       /tactile/{serial}/gradient
       /tactile/{serial}/pointcloud
@@ -84,6 +90,22 @@ class TactileProcessNode(Node):
         rate = self.get_parameter('rate').value
         self.force_field_scale = self.get_parameter(
             'force_field_scale').value
+
+        # Connect to shared memory (retry up to 10s for camera startup)
+        shm_name = f"tactile_{serial}"
+        shm = None
+        for attempt in range(100):
+            try:
+                shm = shared_memory.SharedMemory(name=shm_name, create=False)
+                break
+            except FileNotFoundError:
+                time.sleep(0.1)
+        if shm is None:
+            raise RuntimeError(
+                f"Shared memory '{shm_name}' not found after 10s")
+        self._shm = shm
+        self._last_seq = -1
+        self._serial = serial
 
         # Determine outputs based on parameter or mode
         if outputs_param:
@@ -153,16 +175,12 @@ class TactileProcessNode(Node):
 
         # Background collection state
         self._bg_buffer = []
-        self._bg_frame_count = 0
-        self._bg_last_ts = 0.0
         self._bg_done = False
         self.ppmm = ppmm
 
-        # Subscribe to raw camera frames
-        self.bridge = CvBridge()
-        self.sub = self.create_subscription(
-            Image, f'tactile/{serial}/raw',
-            self.raw_callback, 10)
+        # Publish raw frame (re-published from shm)
+        self.raw_pub = self.create_publisher(
+            Image, f'tactile/{serial}/raw', 10)
 
         # Create publishers
         self.output_publishers = {}
@@ -198,47 +216,63 @@ class TactileProcessNode(Node):
         self.get_logger().info(
             f'Process node ready for {serial} ({model_device})')
 
-    def _raw_to_bgr(self, msg):
-        """Convert ROS Image (rgb8) -> BGR numpy array."""
-        try:
-            frame = self.bridge.imgmsg_to_cv2(
-                msg, desired_encoding='rgb8')
-            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        except Exception:
-            frame = np.frombuffer(
-                msg.data, dtype=np.uint8).reshape(
-                    msg.height, msg.width, 3)
-            frame = frame[..., ::-1]
-        return frame
+    def _read_shm_frame(self) -> np.ndarray | None:
+        """Read latest frame from shared memory. Returns BGR array or None."""
+        buf = self._shm.buf
+        valid = int(buf[24])
+        if not valid:
+            return None
+        seq = int.from_bytes(buf[0:8], 'little')
+        if seq == self._last_seq:
+            return None
+        self._last_seq = seq
+        h = int.from_bytes(buf[16:20], 'little')
+        w = int.from_bytes(buf[20:24], 'little')
+        rgb = np.frombuffer(buf[32:], dtype=np.uint8).reshape(h, w, 3)
+        return rgb[..., ::-1]  # RGB→BGR
 
-    def raw_callback(self, msg):
-        """Handle incoming raw camera frame for background + processing."""
-        frame = self._raw_to_bgr(msg)
+    def _publish_raw(self, bgr: np.ndarray, stamp):
+        """Publish BGR frame as ROS Image (bgr8)."""
+        msg = Image()
+        msg.height, msg.width = bgr.shape[0], bgr.shape[1]
+        msg.encoding = 'bgr8'
+        msg.is_bigendian = False
+        msg.step = bgr.shape[1] * 3
+        msg.data = np.ascontiguousarray(bgr).tobytes()
+        msg.header.frame_id = f'tactile_{self._serial}'
+        msg.header.stamp = stamp
+        self.raw_pub.publish(msg)
 
-        # Background collection (first BG_COLLECTION_FRAMES frames)
-        if not self._bg_done:
-            now = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-            if (len(self._bg_buffer) == 0 or
-                    now - self._bg_last_ts >= BG_COLLECTION_DELAY_SEC):
-                self._bg_buffer.append(frame)
-                self._bg_last_ts = now
-                if len(self._bg_buffer) >= BG_COLLECTION_FRAMES:
-                    bg_image = np.mean(
-                        self._bg_buffer, axis=0).astype(np.uint8)
-                    self.processor.load_background(bg_image)
-                    self.processor.start_thread(
-                        outputs=self.outputs,
-                        ppmm=self.ppmm,
-                        **self._depth_kwargs)
-                    self._bg_done = True
-                    self.get_logger().info(
-                        f'Background collected '
-                        f'({len(self._bg_buffer)} frames)')
+    def _process_frame(self, frame: np.ndarray):
+        """Background collection + corruption check + route to processor."""
+        # Corruption check: mx/med > 3.0 = STM32 horizontal tear
+        row_d = np.sum(np.abs(
+            frame[:-1].astype(np.int16) - frame[1:].astype(np.int16)
+        ), axis=(1, 2))
+        med, mx = float(np.median(row_d)), float(np.max(row_d))
+        if med > 0 and mx / med > 3.0:
+            # Corrupt frame — skip, don't use for background or processing
             return
 
-        # Route frame to processor
-        ts = time.time()
-        self.processor.set_input_frame(frame, ts)
+        # Background collection (first BG_COLLECTION_FRAMES clean frames)
+        if not self._bg_done:
+            self._bg_buffer.append(frame)
+            if len(self._bg_buffer) >= BG_COLLECTION_FRAMES:
+                bg_image = np.mean(
+                    self._bg_buffer, axis=0).astype(np.uint8)
+                self.processor.load_background(bg_image)
+                self.processor.start_thread(
+                    outputs=self.outputs,
+                    ppmm=self.ppmm,
+                    **self._depth_kwargs)
+                self._bg_done = True
+                self.get_logger().info(
+                    f'Background collected '
+                    f'({len(self._bg_buffer)} clean frames)')
+            return
+
+        # Route clean frame to processor
+        self.processor.set_input_frame(frame, time.time())
 
     # --- Message conversion helpers ---
 
@@ -417,7 +451,16 @@ class TactileProcessNode(Node):
     # --- Publish loop ---
 
     def timer_callback(self):
-        """Publish latest processor results."""
+        """Poll shm for new frame, process it, then publish results."""
+        # 1. Poll shm for new camera frame
+        bgr = self._read_shm_frame()
+        if bgr is not None:
+            # Re-publish raw frame as ROS Image
+            self._publish_raw(bgr, self.get_clock().now().to_msg())
+            # Corruption check + background + feed to processor
+            self._process_frame(bgr)
+
+        # 2. Publish latest processor results
         result = self.processor.get_latest_result()
         if not result:
             return
@@ -499,6 +542,8 @@ class TactileProcessNode(Node):
 
     def destroy_node(self):
         self.processor.stop_thread()
+        if hasattr(self, '_shm') and self._shm is not None:
+            self._shm.close()
         super().destroy_node()
 
 

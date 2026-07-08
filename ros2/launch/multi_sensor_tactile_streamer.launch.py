@@ -1,18 +1,20 @@
 import os
 
 from launch import LaunchDescription
-from launch_ros.actions import Node
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, ExecuteProcess
 from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+from ament_index_python.packages import get_package_prefix
 
 '''
 This launch file starts camera and depth nodes for each DIGIT sensor.
 Each sensor gets:
-  1. camera_node: reads DIGIT at 60Hz, publishes /tactile/{serial}/raw
-  2. process_node: subscribes /raw, runs depth/force, publishes depth/pc/force
+  1. camera_shm: reads DIGIT at 60Hz, writes to shared memory (no rclpy)
+  2. process_node: reads shm, runs depth/force, publishes depth/pc/force/raw
 
-Process separation: each node runs in its own process (own GIL),
-so camera thread never competes with depth model for CPU.
+camera_shm is a plain Python process (NO rclpy/DDS) — it writes RGB frames
++ metadata to SharedMemory. process_node is a ROS2 rclpy node that polls
+shm, re-publishes /raw, runs the depth model, and publishes results.
 
 Usage Examples:
 ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py mode:=depth
@@ -66,23 +68,22 @@ def launch_setup(context, *args, **kwargs):
     if not sensors:
         sensors = ["D21275", "D21273", "D21242", "D21119"]
 
+    # Path to camera_shm executable (installed by CMakeLists)
+    camera_shm_exe = os.path.join(
+        get_package_prefix('vistac_sdk'),
+        'lib', 'vistac_sdk', 'camera_shm')
+
     nodes = []
     for serial in sensors:
-        # --- CAMERA NODE (no processing, just capture) ---
-        camera_params = {
-            "serial": serial,
-            "sensors_root": sensors_root,
-            "rate": 60.0,
-        }
-        nodes.append(Node(
-            package="vistac_sdk",
-            executable="camera_node",
+        # --- CAMERA PROCESS (plain Python, no rclpy) ---
+        nodes.append(ExecuteProcess(
+            cmd=[camera_shm_exe, '--serial', serial,
+                 '--sensors-root', sensors_root],
             name=f"camera_{serial}",
             output="screen",
-            parameters=[camera_params],
         ))
 
-        # --- DEPTH NODE (subscribes /raw, processes, publishes) ---
+        # --- DEPTH NODE (polls shm, runs depth/force, publishes) ---
         depth_params = {
             "serial": serial,
             "sensors_root": sensors_root,
