@@ -7,7 +7,7 @@ import numpy as np
 
 import pyudev
 
-from vistac_sdk.utils import load_config
+from digit_sdk.utils import load_config
 
 '''This module provides a Camera class for low latency image acquisition using OpenCV.
 It supports both DIGIT cameras and generic V4L2 cameras.

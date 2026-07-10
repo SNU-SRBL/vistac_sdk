@@ -6,8 +6,8 @@ import cv2
 import numpy as np
 
 from calibration.utils import load_csv_as_dict
-from vistac_sdk.vistac_reconstruct import image2bgrxys
-from vistac_sdk.utils import load_config
+from digit_sdk.digit_reconstruct import image2bgrxys
+from digit_sdk.utils import load_config
 
 """
 This script prepares dataset for the tactile sensor calibration.

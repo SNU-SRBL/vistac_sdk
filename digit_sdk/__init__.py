@@ -1,5 +1,5 @@
 """
-VisTac SDK: Visual-Tactile Sensor Processing
+Digit SDK: Visual-Tactile Sensor Processing
 
 This package provides depth reconstruction and force estimation for vision-based
 tactile sensors (DIGIT). It includes both low-level estimators and high-level
@@ -13,7 +13,7 @@ Main Classes:
 - TemporalBuffer: Circular buffer for temporal frame management
 
 Example:
-    >>> from vistac_sdk import TactileProcessor
+    >>> from digit_sdk import TactileProcessor
     >>> processor = TactileProcessor(model_path="model.pth", enable_depth=True)
     >>> processor.load_background(bg_image)
     >>> result = processor.process(image=frame, outputs=['depth', 'pointcloud'])
@@ -25,11 +25,11 @@ __version__ = "1.0.0"
 # Low-level processors
 from .tactile_processor import TactileProcessor
 from .processing_engine import ProcessingEngine
-from .vistac_reconstruct import DepthEstimator
-from .vistac_force import ForceEstimator
+from .digit_reconstruct import DepthEstimator
+from .digit_force import ForceEstimator
 
 # Device interface
-from .vistac_device import Camera
+from .digit_device import Camera
 
 # Utilities
 from .temporal_buffer import TemporalBuffer

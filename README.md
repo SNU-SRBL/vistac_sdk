@@ -15,8 +15,8 @@ Modified version of [gs_sdk](https://github.com/joehjhuang/gs_sdk) with automati
 ## Installation
 
 ```bash
-git clone git@github.com:SNU-SRBL/vistac_sdk.git
-cd vistac_sdk
+git clone git@github.com:SNU-SRBL/digit_sdk.git
+cd digit_sdk
 pip install -e .
 ```
 
@@ -36,13 +36,13 @@ Place `{serial}.yaml` in `sensors/{serial}/{serial}.yaml` for each DIGIT sensor.
 ## ROS2 Launch
 
 ```bash
-ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py
+ros2 launch digit_sdk multi_sensor_tactile_streamer.launch.py
 ```
 
 With options:
 
 ```bash
-ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py \
+ros2 launch digit_sdk multi_sensor_tactile_streamer.launch.py \
   mode:=depth outputs:=depth model_device:=cuda rate:=60.0 enable_force:=true
 ```
 
@@ -116,7 +116,7 @@ top half of frame N and bottom half of frame N+1 get mixed, producing a horizont
 tear. This issue is specific to QVGA at 60 Hz; lower resolutions or framerates are
 not affected. No USB/V4L2 health signal exists for this.
 
-**Detector** (`Camera._is_corrupt`, in `vistac_device.py`):
+**Detector** (`Camera._is_corrupt`, in `digit_device.py`):
 1. `cv2.absdiff` per BGR channel → max → (H-1)×W row-diff
 2. Spike mask: each pixel 3× larger than neighbors above AND below, AND >20 absolute
 3. Modal row: row with most spike-columns. Must have >50% of W columns agreeing.
@@ -132,7 +132,7 @@ triggers `_recover()` even without visible tears. Catches silent camera slowdown
 ### Key Design Decisions
 
 - SHM stores BGR directly — zero-copy view for raw_bridge, one copy for process_node
-- `is_corrupt` single source of truth in `vistac_device.py` (not duplicated in processing_engine)
+- `is_corrupt` single source of truth in `digit_device.py` (not duplicated in processing_engine)
 - `connect()` uses `/dev/video*` path string, survives STREAMOFF/STREAMON V4L2 index shifts
 - Flatness gate proven contact-safe: tear flatness=0.96-1.00, contact=0.85, clean=0.75-0.88
 - Best Effort QoS for raw/depth (fire-and-forget, no ACK overhead)
@@ -161,7 +161,7 @@ python apps/live_viewer.py --serial D21273 --outputs depth,force_field,force_vec
 ### Python API
 
 ```python
-from vistac_sdk import Camera
+from digit_sdk import Camera
 
 camera = Camera(serial="D21273", sensors_root="sensors")
 camera.connect()

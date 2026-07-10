@@ -4,9 +4,9 @@ import os
 import cv2
 import numpy as np
 
-from vistac_sdk.vistac_device import Camera
+from digit_sdk.digit_device import Camera
 from calibration.utils import load_csv_as_dict
-from vistac_sdk.utils import load_config
+from digit_sdk.utils import load_config
 
 """
 This script collects tactile data using ball indenters for sensor calibration.

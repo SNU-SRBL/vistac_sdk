@@ -10,7 +10,7 @@ from nanogui import glfw
 import yaml
 
 from calibration.utils import load_csv_as_dict
-from vistac_sdk.utils import load_config
+from digit_sdk.utils import load_config
 
 """
 Rewrite from Zilin Si's code: https://github.com/Robo-Touch/Taxim

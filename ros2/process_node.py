@@ -39,7 +39,7 @@ from geometry_msgs.msg import WrenchStamped
 from std_msgs.msg import Header
 import numpy as np
 
-from vistac_sdk.processing_engine import ProcessingEngine
+from digit_sdk.processing_engine import ProcessingEngine
 
 
 class TactileProcessNode(Node):
@@ -270,7 +270,7 @@ class TactileProcessNode(Node):
 
                         viz_pub = pubs.get('force_field_viz')
                         if viz_pub is not None:
-                            from vistac_sdk.viz_utils import \
+                            from digit_sdk.viz_utils import \
                                 force_field_to_rgb
                             rgb8 = force_field_to_rgb(normal, shear)
                             viz_msg = self._cv2_to_imgmsg(

@@ -23,10 +23,10 @@ topics; process_node handles depth/force computation. Separating raw into
 its own node removes the 230KB/frame DDS bottleneck from depth processing.
 
 Usage Examples:
-ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py mode:=depth
-ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py mode:=pointcloud model_device:=cpu
-ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py enable_force:=true mode:=force_vector
-ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py outputs:=depth,force_field,force_vector
+ros2 launch digit_sdk multi_sensor_tactile_streamer.launch.py mode:=depth
+ros2 launch digit_sdk multi_sensor_tactile_streamer.launch.py mode:=pointcloud model_device:=cpu
+ros2 launch digit_sdk multi_sensor_tactile_streamer.launch.py enable_force:=true mode:=force_vector
+ros2 launch digit_sdk multi_sensor_tactile_streamer.launch.py outputs:=depth,force_field,force_vector
 '''
 
 
@@ -82,8 +82,8 @@ def launch_setup(context, *args, **kwargs):
         sensors = ["D21275", "D21273", "D21242", "D21119"]
 
     # Path to executables
-    pkg_prefix = get_package_prefix('vistac_sdk')
-    camera_shm_exe = os.path.join(pkg_prefix, 'lib', 'vistac_sdk', 'camera_shm')
+    pkg_prefix = get_package_prefix('digit_sdk')
+    camera_shm_exe = os.path.join(pkg_prefix, 'lib', 'digit_sdk', 'camera_shm')
 
     nodes = []
     for i, serial in enumerate(sensors):
@@ -121,7 +121,7 @@ def launch_setup(context, *args, **kwargs):
         process_params["outputs"] = outputs
 
     nodes.append(Node(
-        package="vistac_sdk",
+        package="digit_sdk",
         executable="process_node",
         name="tactile_process_node",
         output="screen",
@@ -131,7 +131,7 @@ def launch_setup(context, *args, **kwargs):
     # --- RAW BRIDGE NODES (one per sensor — independent GIL) ---
     for i, serial in enumerate(sensors):
         nodes.append(Node(
-            package="vistac_sdk",
+            package="digit_sdk",
             executable="raw_bridge_node",
             name=f"raw_bridge_{serial}",
             output="screen",

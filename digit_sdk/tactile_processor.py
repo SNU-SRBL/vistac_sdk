@@ -12,8 +12,8 @@ from typing import Dict, List, Optional, Union
 
 import numpy as np
 
-from .vistac_reconstruct import DepthEstimator
-from .vistac_force import ForceEstimator
+from .digit_reconstruct import DepthEstimator
+from .digit_force import ForceEstimator
 
 
 class TactileProcessor:
