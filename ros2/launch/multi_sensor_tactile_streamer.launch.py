@@ -32,8 +32,13 @@ ros2 launch digit_sdk multi_sensor_tactile_streamer.launch.py outputs:=depth,for
 
 def launch_setup(context, *args, **kwargs):
     # ── Pre-launch cleanup: kill stale processes, clear SHM ──
+    # SIGINT (-2) lets rclpy shutdown cleanly and FastRTPS clean up SHM.
+    # Do NOT use pkill -9 (SIGKILL) — corrupts DDS SHM.
+    # Do NOT use plain pkill (SIGTERM) — ROS2 nodes need SIGINT for rclpy.
+    # /dev/shm/tactile_* is our app SHM (unrelated to DDS); cleanup stays.
+    # /dev/shm/fastdds* is DDS SHM safety net for crash recovery.
     subprocess.run(
-        "pkill -9 -f 'camera_shm|process_node|raw_bridge' 2>/dev/null; "
+        "pkill -2 -f 'camera_shm|process_node|raw_bridge' 2>/dev/null; "
         "rm -f /dev/shm/tactile_* /dev/shm/fastdds* 2>/dev/null; "
         "sleep 1",
         shell=True, timeout=5)
@@ -217,5 +222,5 @@ def generate_launch_description():
             default_value='0.0',
             description='Point spacing in mm for pointcloud subsampling'),
 
-        OpaqueFunction(function=launch_setup)
+        OpaqueFunction(function=launch_setup),
     ])
