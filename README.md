@@ -1,8 +1,8 @@
-# Visual-tactile SDK
+# DIGIT SDK
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-Modified version of [gs_sdk](https://github.com/joehjhuang/gs_sdk) with automatic DIGIT identification, parallel processing, STM32 corruption recovery, and ROS2 integration.
+Modified version of [gs_sdk](https://github.com/joehjhuang/gs_sdk) (depth estimation via per-sensor calibration) integrating [Sparsh](https://github.com/facebookresearch/sparsh) (cross-sensor force estimation), with automatic DIGIT identification, parallel processing, STM32 corruption recovery, and ROS2 integration.
 
 **Authors**: [Byung-Hyun Song](https://github.com/bhsong1011) (bh.song@snu.ac.kr)
 
@@ -181,7 +181,7 @@ See [Calibration README](calibration/README.md).
 
 ## License
 
-Force estimation uses [Sparsh](https://github.com/facebookresearch/sparsh) models (CC-BY-NC 4.0, non-commercial). Other components retain original licenses.
+Force estimation uses [Sparsh](https://github.com/facebookresearch/sparsh) models (CC-BY-NC 4.0, non-commercial). Other components retain the original gs_sdk license.
 
 ## References
 

@@ -1,4 +1,4 @@
-# VisTac SDK Requirements
+# DIGIT SDK Requirements
 
 # Core dependencies
 pillow>=10.0.0

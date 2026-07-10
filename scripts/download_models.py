@@ -176,7 +176,7 @@ def check_models_exist(models_dir: Path) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Download Sparsh models for VisTac force estimation",
+        description="Download Sparsh models for DIGIT force estimation",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -220,7 +220,7 @@ Examples:
     models_dir.mkdir(parents=True, exist_ok=True)
     
     print("=" * 70)
-    print("Sparsh Model Downloader for VisTac SDK")
+    print("Sparsh Model Downloader for DIGIT SDK")
     print("=" * 70)
     print(f"\nModels directory: {models_dir.absolute()}\n")
     
@@ -261,7 +261,7 @@ Examples:
     if success_count == total:
         print(f"✓ SUCCESS: All {total} models ready")
         print(f"\nModels saved to: {models_dir.absolute()}")
-        print("\nYou can now use force estimation in VisTac SDK!")
+        print("\nYou can now use force estimation in DIGIT SDK!")
     else:
         print(f"⚠ PARTIAL: {success_count}/{total} models downloaded")
         print("\nSome downloads failed. Please check errors above and retry.")
