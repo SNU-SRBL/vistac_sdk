@@ -4,11 +4,13 @@
 ProcessingEngine handles SHM reading, corruption filter, background collection,
 and TactileProcessor management — all pure Python, no ROS.
 
-This node reads frames from the engine, publishes /raw to ROS, feeds frames to
-the engine's processor, polls results, and publishes depth/pc/force.
+This node reads frames from SHM, feeds the frame to the engine's processor,
+polls results, and publishes depth/pc/force.
+
+Raw frames are published by a separate raw_bridge_node which reads the same
+SHM blocks independently.
 
 Topics (published per serial):
-  /tactile/{serial}/raw         — Image (bgr8)
   /tactile/{serial}/depth       — Image (mono8)
   /tactile/{serial}/gradient    — Image (32FC2)
   /tactile/{serial}/pointcloud  — PointCloud2
@@ -20,6 +22,8 @@ from typing import Dict
 
 import rclpy
 from rclpy.node import Node
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.parameter import Parameter
 from rcl_interfaces.msg import ParameterDescriptor, ParameterType
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
@@ -140,11 +144,8 @@ class TactileProcessNode(Node):
             self._engine.collect_background(serial)
 
         # ---- Publishers (BestEffort QoS) ----
-        self.raw_pubs: Dict[str, object] = {}
         self.output_publishers: Dict[str, dict] = {}
         for serial in active_sensors:
-            self.raw_pubs[serial] = self.create_publisher(
-                Image, f'tactile/{serial}/raw', _BE_QOS)
             base_topic = f'tactile/{serial}'
             self.output_publishers[serial] = {}
             for output in outputs:
@@ -179,12 +180,14 @@ class TactileProcessNode(Node):
                         self.create_publisher(
                             Image, f'{base_topic}/raw', _BE_QOS)
 
-        # ---- Per-sensor timers (SingleThreadedExecutor processes one at a time) ----
+        # ---- Per-sensor timers (parallel via ReentrantCallbackGroup + MultiThreadedExecutor) ----
         self._sensor_timers: Dict[str, object] = {}
         for serial in active_sensors:
+            cbg = ReentrantCallbackGroup()
             self._sensor_timers[serial] = self.create_timer(
                 1.0 / rate,
                 lambda s=serial: self._handle_sensor(s),
+                callback_group=cbg,
             )
 
         self.get_logger().info(
@@ -196,12 +199,10 @@ class TactileProcessNode(Node):
     # ------------------------------------------------------------------
 
     def _handle_sensor(self, serial: str):
-        """Read frame from engine, publish raw, feed processor, publish results."""
-        now = self.get_clock().now()
+        """Read frame from engine, feed processor, publish results.
+        Raw frames are published by raw_bridge_node."""
         bgr = self._engine.read_frame(serial)
         if bgr is not None:
-            stamp = now.to_msg()
-            self._publish_raw(serial, bgr, stamp)
             self._engine.feed_frame(serial, bgr)
 
         result = self._engine.get_result(serial)
@@ -210,25 +211,6 @@ class TactileProcessNode(Node):
             header.stamp = self.get_clock().now().to_msg()
             header.frame_id = f'tactile_{serial}'
             self._publish_results(serial, result, header)
-
-    # ------------------------------------------------------------------
-    # Raw publishing
-    # ------------------------------------------------------------------
-
-    def _publish_raw(self, serial: str, bgr: np.ndarray, stamp):
-        """Publish BGR frame as ROS Image."""
-        pub = self.raw_pubs.get(serial)
-        if pub is None:
-            return
-        msg = Image()
-        msg.height, msg.width = bgr.shape[0], bgr.shape[1]
-        msg.encoding = 'bgr8'
-        msg.is_bigendian = False
-        msg.step = bgr.shape[1] * 3
-        msg.data = np.ascontiguousarray(bgr).tobytes()
-        msg.header.frame_id = f'tactile_{serial}'
-        msg.header.stamp = stamp
-        pub.publish(msg)
 
     # ------------------------------------------------------------------
     # Result publishing
@@ -386,7 +368,6 @@ class TactileProcessNode(Node):
 
     def destroy_node(self):
         self._engine.shutdown()
-        self.raw_pubs.clear()
         self.output_publishers.clear()
         super().destroy_node()
 
@@ -394,11 +375,15 @@ class TactileProcessNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = TactileProcessNode()
+    num_threads = max(len(node._serials), 1)
+    executor = MultiThreadedExecutor(num_threads=num_threads)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
+        executor.shutdown()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

@@ -4,16 +4,16 @@
 Plain Python (no rclpy, no DDS). Writes BGR→RGB frames plus metadata
 to a SharedMemory block named 'tactile_{serial}'.
 
-Layout (230432 bytes):
+Layout (header + dynamic payload):
   Offset   Size  Field        Type     Description
   ------   ----  -----        ----     -----------
       0      8   seq          uint64   Monotonic frame counter
       8      8   timestamp_ns uint64   time.monotonic_ns() at capture
-     16      4   height       uint32   Frame height (240)
-     20      4   width        uint32   Frame width (320)
+     16      4   height       uint32   Frame height
+     20      4   width        uint32   Frame width
      24      1   valid        uint8    0=writing, 1=complete
      25      7   (padding)    --       Alignment to 32
-     32  230400  data         uint8[]  RGB frame (320×240×3)
+     32    H*W*3  data         uint8[]  BGR frame (height × width × 3)
 
 Synchronization (lock-free, single writer / single reader):
   1. Set valid=0
@@ -23,6 +23,7 @@ Synchronization (lock-free, single writer / single reader):
 """
 
 import argparse
+import os
 import signal
 import struct
 import sys
@@ -34,13 +35,21 @@ import numpy as np
 
 from vistac_sdk.vistac_device import Camera
 
-SHM_SIZE = 230432
-DATA_OFFSET = 32
+SHM_HEADER = 32  # bytes before pixel data
+
+
+def shm_size_for(camera: Camera) -> int:
+    """Compute SHM block size from camera resolution."""
+    return SHM_HEADER + camera.raw_imgh * camera.raw_imgw * 3
 
 
 def run(serial: str, sensors_root: str, verbose: bool = False):
     """Main capture loop. Writes frames to shared memory."""
     shm_name = f"tactile_{serial}"
+
+    # Create camera first — SHM size depends on resolution
+    camera = Camera(serial=serial, sensors_root=sensors_root)
+    camera.connect(verbose=verbose)
 
     # Clean up stale shm if any
     try:
@@ -53,10 +62,7 @@ def run(serial: str, sensors_root: str, verbose: bool = False):
         pass
 
     shm = shared_memory.SharedMemory(
-        name=shm_name, create=True, size=SHM_SIZE)
-
-    camera = Camera(serial=serial, sensors_root=sensors_root)
-    camera.connect(verbose=verbose)
+        name=shm_name, create=True, size=shm_size_for(camera))
 
     running = True
 
@@ -74,24 +80,25 @@ def run(serial: str, sensors_root: str, verbose: bool = False):
         print(f"Camera {serial}: device={camera.device} "
               f"id={camera.dev_id}", flush=True)
 
-    TARGET_DT = 1.0 / 60  # pace at 60 Hz max
+    TARGET_DT = 1.0 / camera.framerate
 
     while running:
         t0 = time.monotonic()
         frame = camera.get_image()
         if frame is None:
-            time.sleep(0.001)
+            # Recovery or corruption — wait a bit before retry
+            time.sleep(0.005)
             continue
 
-        # BGR→RGB (process_node expects BGR, so store RGB here)
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        h, w = rgb.shape[:2]
+        # Store BGR directly (raw_bridge needs BGR, processing_engine expects BGR)
+        bgr = frame
+        h, w = bgr.shape[:2]
         ts_ns = time.monotonic_ns()
 
         # Write: valid=0, metadata, data, seq++, valid=1
         buf[24] = 0
         struct.pack_into('<QQII', buf, 0, seq, ts_ns, h, w)
-        buf[DATA_OFFSET:DATA_OFFSET + h * w * 3] = np.ascontiguousarray(rgb).tobytes()
+        buf[SHM_HEADER:SHM_HEADER + h * w * 3] = np.ascontiguousarray(bgr).tobytes()
         seq += 1
         buf[24] = 1
 
@@ -116,7 +123,12 @@ def main():
                         help='Path to sensors config directory')
     parser.add_argument('--verbose', action='store_true',
                         help='Verbose output')
+    parser.add_argument('--cpu-core', type=int, default=-1,
+                        help='Pin process to CPU core (-1 = no pin)')
     args = parser.parse_args()
+
+    if args.cpu_core >= 0:
+        os.sched_setaffinity(0, {args.cpu_core})
 
     try:
         run(serial=args.serial, sensors_root=args.sensors_root,

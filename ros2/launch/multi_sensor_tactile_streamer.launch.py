@@ -1,4 +1,5 @@
 import os
+import subprocess
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction, ExecuteProcess
@@ -7,14 +8,19 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_prefix
 
 '''
-This launch file starts camera and depth nodes for each DIGIT sensor.
-Each sensor gets:
-  1. camera_shm: reads DIGIT at 60Hz, writes to shared memory (no rclpy)
-  2. process_node: reads shm, runs depth/force, publishes depth/pc/force/raw
+This launch file starts camera, raw_bridge, and depth nodes for each
+DIGIT sensor. Three node types per sensor set:
+  1. camera_shm: reads DIGIT at 60Hz, writes BGR frames to SharedMemory
+     (plain Python, no rclpy)
+  2. raw_bridge_node: reads SHM, publishes /tactile/{serial}/raw on DDS
+     (rclpy, dedicated process, no depth model)
+  3. process_node: reads SHM, runs depth/force, publishes
+     depth/pc/force (rclpy, ProcessingEngine in-process)
 
 camera_shm is a plain Python process (NO rclpy/DDS) — it writes RGB frames
-+ metadata to SharedMemory. process_node is a ROS2 rclpy node that polls
-shm, re-publishes /raw, runs the depth model, and publishes results.
++ metadata to SharedMemory. raw_bridge_node publishes raw frames to ROS
+topics; process_node handles depth/force computation. Separating raw into
+its own node removes the 230KB/frame DDS bottleneck from depth processing.
 
 Usage Examples:
 ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py mode:=depth
@@ -25,6 +31,13 @@ ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py outputs:=depth,fo
 
 
 def launch_setup(context, *args, **kwargs):
+    # ── Pre-launch cleanup: kill stale processes, clear SHM ──
+    subprocess.run(
+        "pkill -9 -f 'camera_shm|process_node|raw_bridge' 2>/dev/null; "
+        "rm -f /dev/shm/tactile_* /dev/shm/fastdds* 2>/dev/null; "
+        "sleep 1",
+        shell=True, timeout=5)
+
     # Get launch arguments
     sensors_root = LaunchConfiguration('sensors_root').perform(context)
     mode = LaunchConfiguration('mode').perform(context)
@@ -73,11 +86,12 @@ def launch_setup(context, *args, **kwargs):
     camera_shm_exe = os.path.join(pkg_prefix, 'lib', 'vistac_sdk', 'camera_shm')
 
     nodes = []
-    for serial in sensors:
+    for i, serial in enumerate(sensors):
         # --- CAMERA PROCESS (plain Python, no rclpy) ---
         nodes.append(ExecuteProcess(
             cmd=[camera_shm_exe, '--serial', serial,
-                 '--sensors-root', sensors_root],
+                 '--sensors-root', sensors_root,
+                 '--cpu-core', str(i)],
             name=f"camera_{serial}",
             output="screen",
         ))
@@ -113,6 +127,16 @@ def launch_setup(context, *args, **kwargs):
         output="screen",
         parameters=[process_params],
     ))
+
+    # --- RAW BRIDGE NODES (one per sensor — independent GIL) ---
+    for i, serial in enumerate(sensors):
+        nodes.append(Node(
+            package="vistac_sdk",
+            executable="raw_bridge_node",
+            name=f"raw_bridge_{serial}",
+            output="screen",
+            parameters=[{"serial": serial, "rate": rate, "cpu_core": i + 4}],
+        ))
 
     return nodes
 

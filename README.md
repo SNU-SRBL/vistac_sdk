@@ -1,252 +1,190 @@
 # Visual-tactile SDK
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0) &nbsp;
 
-This repository is a modified version of [gs_sdk](https://github.com/joehjhuang/gs_sdk) with automatic DIGIT identifying, threaded image collection and calculation, and ROS2 implementation.
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-Authors:
-* [Byung-Hyun Song](https://github.com/bhsong1011) (bh.song@snu.ac.kr)
+Modified version of [gs_sdk](https://github.com/joehjhuang/gs_sdk) with automatic DIGIT identification, parallel processing, STM32 corruption recovery, and ROS2 integration.
 
-## Support System
-* Tested on Ubuntu 22.04
-* Tested on Digit
-* Python >= 3.9
+**Authors**: [Byung-Hyun Song](https://github.com/bhsong1011) (bh.song@snu.ac.kr)
+
+## Support
+
+- Ubuntu 22.04, ROS2 Humble
+- DIGIT tactile sensors (YUYV, up to 640×480 @ 60Hz)
+- Python >= 3.9, CUDA (optional, for force estimation)
 
 ## Installation
-Clone and install vistac_sdk from source:
+
 ```bash
 git clone git@github.com:SNU-SRBL/vistac_sdk.git
 cd vistac_sdk
 pip install -e .
 ```
 
-### Force Estimation Setup (Optional)
-To enable force estimation capabilities using [Sparsh](https://github.com/facebookresearch/sparsh), download the pretrained models:
+### Force Estimation (Optional)
+
 ```bash
-python scripts/download_models.py
+python scripts/download_models.py    # downloads Sparsh models (~1.7 GB)
+pip install -e .[gpu]                 # optional xformers for GPU acceleration
 ```
 
-Optional GPU acceleration dependency (recommended on CUDA systems):
-```bash
-pip install -e .[gpu]
-```
+Models saved to `models/`. Depth pipeline works on CPU. Force pipeline recommended on GPU (~50-80ms vs 500-1000ms CPU).
 
-If `xformers` wheel resolution fails on your platform, continue without it. The force stack still runs, but with reduced performance.
+## Sensor Registration
 
-This will download:
-- **Encoder**: `sparsh-dino-base` (ViT-base, ~1.7 GB)
-- **Decoder**: `sparsh-digit-forcefield` (~15 MB)
+Place `{serial}.yaml` in `sensors/{serial}/{serial}.yaml` for each DIGIT sensor.
 
-Models are saved to `models/` directory.
+## ROS2 Launch
 
-**Requirements**:
-- GPU recommended (CUDA-capable) for real-time performance (~50-80ms)
-- Depth pipeline supports CPU execution.
-- Force pipeline is intended for GPU execution in this project scope.
-
-**Note**: Force estimation is disabled by default and requires explicit activation.
-
-## Sensor Identification
-For multiple DIGIT sensor usage, sensor identification method was implemented from [digit-interface](https://github.com/facebookresearch/digit-interface).
-### Sensor Registeration
-For a sensor with {serial} number, you need a {serial}.yaml inside sensors/{serial}/{serial}.yaml
-
-## Sensor Calibration
-For more details on sensor calibration, see the [Calibration README](calibration/README.md).
-
-## Examples
-These examples show basic usage.
-
-### Sensor Streaming
-Stream images from a connected DIGIT sensor:
-```python
-python apps/live_viewer.py --serial D21273 --mode depth
-```
-
-### Depth Reconstruction
-Stream reconstructed depth from a connected DIGIT sensor:
-```python
-python apps/live_viewer.py --serial D21273 --mode depth
-```
-
-With advanced options:
-```python
-python apps/live_viewer.py --serial D21273 --use_mask --mode depth --relative --relative_scale 0.5 --height_threshold 0.5
-```
-
-### Force Estimation
-**Prerequisites**: Download models first (`python scripts/download_models.py`)
-
-#### Force Field (Dense Heatmap)
-Visualize force distribution as RGB heatmap (R=Fx, G=Fy, B=Fz):
-```python
-python apps/live_viewer.py --serial D21273 --mode force_field --enable_force
-```
-
-#### PointCloud colored by Force
-Visualize point cloud colored by the force field (per-point RGB: R=Fx, G=Fy, B=Fz):
-```python
-python apps/live_viewer.py --serial D21273 --mode pointcloud_force --enable_force
-```
-
-#### Force Vector (Arrow Overlay)
-Show aggregated force vector with magnitude:
-```python
-python apps/live_viewer.py --serial D21273 --mode force_vector --enable_force
-```
-
-#### Combined Outputs (Multi-Panel)
-Display multiple outputs simultaneously:
-```python
-python apps/live_viewer.py --serial D21273 --enable_force --outputs depth force_field force_vector
-```
-
-### Python API Usage
-
-#### Standalone (without ROS)
-
-```python
-from vistac_sdk import Camera, TactileProcessor
-from vistac_sdk.utils import load_config
-import numpy as np, time
-
-# Open camera
-camera = Camera(serial="D21273", sensors_root="sensors")
-camera.connect()
-
-# Collect background (10 frames, 200ms apart)
-bg_images = []
-for _ in range(10):
-    time.sleep(0.2)
-    frame = camera.get_image()
-    while frame is None:
-        time.sleep(0.01)
-        frame = camera.get_image()
-    bg_images.append(frame)
-bg = np.mean(bg_images, axis=0).astype(np.uint8)
-
-# Load processor
-config = load_config(serial="D21273", sensors_root="sensors")
-processor = TactileProcessor(
-    model_path=f"sensors/D21273/model/nnmodel.pth",
-    enable_depth=True,
-    enable_force=False,
-    ppmm=config["ppmm"])
-processor.load_background(bg)
-processor.start_thread(outputs=['depth', 'pointcloud'])
-
-# Process frames
-while True:
-    frame = camera.get_image()
-    if frame is not None:
-        processor.set_input_frame(frame, time.time())
-    result = processor.get_latest_result()
-    # result = {'depth': ndarray, 'pointcloud': ndarray, ...}
-```
-
-#### Select outputs per frame
-
-```python
-processor.start_thread(outputs=['depth', 'force_field', 'force_vector'])
-# processor.process() computes only requested outputs per frame
-```
-
-### ROS2 Integration
-
-#### Depth Streaming (Default)
 ```bash
 ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py
 ```
 
-#### Force Estimation
-```bash
-ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py enable_force:=true
-```
+With options:
 
-#### Combined Depth + Force
 ```bash
 ros2 launch vistac_sdk multi_sensor_tactile_streamer.launch.py \
-    enable_force:=true \
-    outputs:=depth,force_field,force_vector
+  mode:=depth outputs:=depth model_device:=cuda rate:=60.0 enable_force:=true
 ```
 
-**Published Topics**:
-- `/tactile/{serial}/depth` - `sensor_msgs/Image` (mono8)
-- `/tactile/{serial}/gradient` - `sensor_msgs/Image` (32FC2)
-- `/tactile/{serial}/pointcloud` - `sensor_msgs/PointCloud2`
-- `/tactile/{serial}/force_field` - `sensor_msgs/Image` (32FC3, RGB=Fx,Fy,Fz)  # channels: R=fx, G=fy, B=fz
-- `/tactile/{serial}/force_field_viz` - `sensor_msgs/Image` (rgb8, RViz-friendly force visualization)
-- `/tactile/{serial}/force_vector` - `geometry_msgs/WrenchStamped`
+**Published topics**:
+| Topic | Type | Description |
+|-------|------|-------------|
+| `/tactile/{serial}/raw` | `sensor_msgs/Image` (bgr8) | Raw camera frame (from camera config), Best Effort |
+| `/tactile/{serial}/depth` | `sensor_msgs/Image` (mono8) | Depth in mm |
+| `/tactile/{serial}/pointcloud` | `sensor_msgs/PointCloud2` | XYZ point cloud |
+| `/tactile/{serial}/force_field` | `sensor_msgs/Image` (32FC3) | Force field (R=Fx, G=Fy, B=Fz) |
+| `/tactile/{serial}/force_field_viz` | `sensor_msgs/Image` (rgb8) | RViz-friendly force visualization |
+| `/tactile/{serial}/force_vector` | `geometry_msgs/WrenchStamped` | Aggregated force vector |
 
-**RViz notes**:
-- Set Fixed Frame to `tactile_{serial}` (e.g., `tactile_D21242`).
-- Use `/tactile/{serial}/force_field_viz` for image display in RViz. (`32FC3` is not directly supported by RViz Image display.)
+**Launch parameters**:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `rate` | 60.0 | Camera capture rate (Hz) |
+| `mode` | depth | Processing mode: depth, gradient, pointcloud, force_field, force_vector |
+| `outputs` | — | Comma-separated output list (overrides mode) |
+| `model_device` | cuda | Device: cuda or cpu |
+| `enable_force` | false | Enable Sparsh force estimation |
+| `use_mask` | true | Apply contact mask |
+| `sensors_root` | auto | Path to sensor configs |
+
+**RViz notes**: Set Fixed Frame to `tactile_{serial}`. Use `force_field_viz` for image display (32FC3 not supported by RViz Image).
 
 ## Architecture
 
-### Modular Design
-- **Camera**: Synchronous DIGIT camera capture (own GIL in ROS mode)
-- **TactileProcessor**: Unified depth/force inference with selective outputs
-- **DepthEstimator**: Fast MLP-based depth reconstruction (~1-2ms)
-- **ForceEstimator**: Sparsh ViT-based force estimation (~50-80ms on GPU)
-- **TemporalBuffer**: Circular buffer for temporal frame pairs
+### Process Layout (4-camera deployment)
 
-### ROS2 Architecture
-Two separate processes per sensor:
-1. **camera_node**: Reads DIGIT at 60Hz, publishes `/tactile/{serial}/raw` (rgb8)
-2. **process_node**: Subscribes `/tactile/{serial}/raw`, runs TactileProcessor, publishes depth/pointcloud/force topics
+```
+Launch auto-cleanup: pkill stale + rm /dev/shm before start.
 
-Each node runs in its own process (own GIL), so camera capture never competes with depth inference for CPU time.
+camera_shm ×4  ──→  /dev/shm/tactile_*  (lock-free, dynamic size)
+  Core 0-3           plain Python, no rclpy, own GIL
+  │                   Camera.get_image():
+  │                     ├ _is_corrupt() → chan_absdiff step-detector
+  │                     ├ FPS watchdog → _recover() if gap > 1.5× expected
+  │                     └ _recover() → STREAMOFF/STREAMON (~270ms)
 
-### Force Estimation Pipeline
-1. **Temporal Buffering**: Maintains circular buffer of recent frames
-2. **Background Subtraction**: Normalizes contact appearance (configurable offset)
-3. **Encoder**: ViT-base (768-dim) extracts visual features from temporal pairs
-4. **Decoder**: DPT-style multi-scale fusion predicts normal/shear force fields
-5. **Aggregation**: Spatial averaging produces force vector (Fx, Fy, Fz)
+raw_bridge ×4   ←──  /dev/shm/tactile_*  ──→  /tactile/{serial}/raw (DDS)
+  Core 4-7           rclpy SingleThreadedExecutor(1), own GIL
+                      Reads SHM → tobytes() → publish Image (bgr8)
 
-### Selective Execution
-Only requested outputs are computed per frame, enabling efficient performance:
-- Depth-only: ~1-2ms
-- Force-only: ~50-80ms (GPU)
-- Combined: ~50-80ms (GPU, force dominates)
+process_node ×1  ←──  /dev/shm/tactile_*  ──→  depth/pc/force (DDS)
+  Core free           rclpy MultiThreadedExecutor(4), CUDA
+                      ProcessingEngine: read SHM → feed model → publish
+```
 
-### Output Formats
-**Depth outputs**:
-- `depth`: `[H, W]` uint8, depth in mm
-- `gradient`: `[H, W, 2]` float32, surface gradients
-- `pointcloud`: `[N, 3]` float32, XYZ coordinates in meters
-- `pointcloud_colors` (optional): `[N, 3]` float32 RGB colors derived from the force field (R=fx, G=fy, B=fz)
-- `pointcloud_forces` (optional): `[N, 3]` float32 per-point force values (fx, fy, fz)
-- `mask`: `[H, W]` bool, contact mask
+**9 OS processes total** — each camera_shm and raw_bridge pinned to a dedicated core via `os.sched_setaffinity`. process_node unbound (CUDA-heavy).
 
-**Force outputs** (None during warmup):
-- `force_field`: dict with `normal` [224, 224] and `shear` [224, 224, 2]
-- `force_vector`: dict with `fx`, `fy`, `fz` scalars (normalized [-1, 1])
+### Shared Memory Layout (header + dynamic payload)
 
-### Force Visualization Policy
-- `ForceEstimator` outputs are model-native: `normal` is sigmoid-bounded to `[0,1]`; `shear` is model-scaled (Sparsh head semantics).
-- The process_node and live_viewer apply presentation policy: `normal` is clamped to `[0,1]`, `shear` is clamped to `[-1,1]`.
-- `force_field_scale` is a **display-only multiplier** used for visualization consistency; it is not a physical calibration.
-- RGB mapping is centralized as `(R,G,B)=(Fx,Fy,Fz)` via `force_field_to_rgb` in `viz_utils`.
-- `visualize_force_field` clips out-of-range `normal` values to `[0,1]` (no `[-1,1]` remap fallback).
+| Offset | Size | Field | Type |
+|--------|------|-------|------|
+| 0 | 8 | seq | uint64 — monotonic frame counter |
+| 8 | 8 | timestamp_ns | uint64 — capture time |
+| 16 | 4 | height | uint32 (from camera config) |
+| 20 | 4 | width | uint32 (from camera config) |
+| 24 | 1 | valid | uint8 — 0=writing, 1=complete |
+| 25 | 7 | (padding) | — alignment to 32 |
+| 32 | H×W×3 | data | uint8[] — BGR frame (height × width × 3) |
 
-## Performance Characteristics
+Lock-free single-writer/multi-reader: camera sets valid=0, writes data, increments seq, sets valid=1. Readers check seq for new frames.
 
-| Component | GPU (CUDA) | CPU |
-|-----------|------------|-----|
-| Depth MLP | ~1-2ms | ~10-20ms |
-| Force ViT | ~30-50ms | ~500-1000ms |
-| Force Decoder | ~15-25ms | Included above |
-| **Total (both)** | **~50-80ms** | **~500-1000ms** |
+### STM32 Corruption Detection & Recovery
 
-**Memory Usage**: ~500MB GPU VRAM for force estimation
+DIGIT sensors at QVGA (320×240) 60 Hz suffer from STM32 DMA buffer aliasing —
+top half of frame N and bottom half of frame N+1 get mixed, producing a horizontal
+tear. This issue is specific to QVGA at 60 Hz; lower resolutions or framerates are
+not affected. No USB/V4L2 health signal exists for this.
+
+**Detector** (`Camera._is_corrupt`, in `vistac_device.py`):
+1. `cv2.absdiff` per BGR channel → max → (H-1)×W row-diff
+2. Spike mask: each pixel 3× larger than neighbors above AND below, AND >20 absolute
+3. Modal row: row with most spike-columns. Must have >50% of W columns agreeing.
+4. Isolation ratio: peak-diff at tear row must be 10× larger than ±5-row neighborhood mean
+5. Neighbor flatness: >80% of spike-columns have neighbor diffs <15 (tear neighbors are identical copies)
+
+**Recovery**: On corrupt detection → `_recover()` (STREAMOFF/STREAMON cycle, ~270 ms, 20 warmup frames). Resets STM32 DMA state. Corruption rate: <1%.
+
+**FPS Watchdog**: Per-frame gap tracking in `Camera.get_image()`. If 10 consecutive
+frame gaps exceed 1.5× the expected interval (derived from configured framerate),
+triggers `_recover()` even without visible tears. Catches silent camera slowdown.
+
+### Key Design Decisions
+
+- SHM stores BGR directly — zero-copy view for raw_bridge, one copy for process_node
+- `is_corrupt` single source of truth in `vistac_device.py` (not duplicated in processing_engine)
+- `connect()` uses `/dev/video*` path string, survives STREAMOFF/STREAMON V4L2 index shifts
+- Flatness gate proven contact-safe: tear flatness=0.96-1.00, contact=0.85, clean=0.75-0.88
+- Best Effort QoS for raw/depth (fire-and-forget, no ACK overhead)
+
+## Performance (4 cameras, 8-core machine)
+
+| Metric | Value |
+|--------|-------|
+| Camera capture (SHM) | 47–59 fps per sensor |
+| Raw DDS | 54–60 Hz per sensor |
+| Depth DDS | ~30 Hz (CUDA model inference bound) |
+| Corruption rate | <1% |
+| Camera CPU | ~6.5% per process |
+| Raw bridge CPU | 82–90% per node (DDS discovery overhead, cosmetic) |
+
+## Examples
+
+### Live Viewer
+
+```bash
+python apps/live_viewer.py --serial D21273 --mode depth
+python apps/live_viewer.py --serial D21273 --mode force_field --enable_force
+python apps/live_viewer.py --serial D21273 --outputs depth,force_field,force_vector
+```
+
+### Python API
+
+```python
+from vistac_sdk import Camera
+
+camera = Camera(serial="D21273", sensors_root="sensors")
+camera.connect()
+# Auto-detects corruption + triggers recovery + watchdog
+# Consumer just calls get_image():
+while True:
+    frame = camera.get_image()
+    if frame is not None:
+        process(frame)
+```
+
+See `apps/live_viewer.py` for full ProcessingEngine integration.
+
+## Sensor Calibration
+
+See [Calibration README](calibration/README.md).
 
 ## License
 
-Force estimation feature uses [Sparsh](https://github.com/facebookresearch/sparsh) models licensed under **CC-BY-NC 4.0** (research/non-commercial use only). Depth reconstruction and other features retain original license.
-
+Force estimation uses [Sparsh](https://github.com/facebookresearch/sparsh) models (CC-BY-NC 4.0, non-commercial). Other components retain original licenses.
 
 ## References
-1. Huang, Hung-Jui and Kaess, Michael and Yuan, Wenzhen, "NormalFlow: Fast, Robust, and Accurate Contact-based Object 6DoF Pose Tracking with Vision-based Tactile Sensors," IEEE Robotics and Automation Letters, 2024.
-2. Akhter, Mohammadreza et al., "Sparsh: Self-supervised touch representations for vision-based tactile sensing," Conference on Robot Learning (CoRL), 2024. [GitHub](https://github.com/facebookresearch/sparsh) | [Paper](https://arxiv.org/abs/2410.24090)
-3. Lambeta, Mike et al., "DIGIT: A novel design for a low-cost compact high-resolution tactile sensor with application to in-hand manipulation," IEEE Robotics and Automation Letters, 2020. [Website](https://digit.ml/)
+
+1. Huang et al., "NormalFlow," IEEE RA-L, 2024.
+2. Akhter et al., "Sparsh," CoRL, 2024. [GitHub](https://github.com/facebookresearch/sparsh)
+3. Lambeta et al., "DIGIT," IEEE RA-L, 2020. [Website](https://digit.ml/)

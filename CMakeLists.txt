@@ -28,6 +28,12 @@ install(PROGRAMS
   RENAME process_node
 )
 
+install(PROGRAMS
+  ros2/raw_bridge_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME raw_bridge_node
+)
+
 # Install launch files
 install(DIRECTORY
   ros2/launch/

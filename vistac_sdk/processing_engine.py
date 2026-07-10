@@ -21,7 +21,7 @@ Typical usage::
     # Poll in a loop:
     for serial in engine.serials:
         frame = engine.read_frame(serial)
-        if frame is not None and not engine.is_corrupt(frame):
+        if frame is not None:
             engine.feed_frame(serial, frame)
     results = engine.get_results()
 """
@@ -130,21 +130,8 @@ class ProcessingEngine:
         w = int.from_bytes(buf[20:24], "little")
         if h == 0 or w == 0:
             return None  # SHM not fully written yet
-        rgb = np.frombuffer(buf[32:32 + h * w * 3], dtype=np.uint8).reshape(h, w, 3)
-        return rgb[..., ::-1].copy()  # RGB → BGR (copy, not view)
-
-    @staticmethod
-    def is_corrupt(frame: np.ndarray, threshold: float = 3.0) -> bool:
-        """Check if *frame* has a STM32 horizontal tear (mx/med > threshold).
-        Returns True if corrupt."""
-        row_d = np.sum(np.abs(
-            frame[:-1].astype(np.int16) - frame[1:].astype(np.int16)
-        ), axis=(1, 2))
-        med = float(np.median(row_d))
-        mx = float(np.max(row_d))
-        if med > 0 and mx / med > threshold:
-            return True
-        return False
+        bgr = np.frombuffer(buf[32:32 + h * w * 3], dtype=np.uint8).reshape(h, w, 3)
+        return bgr.copy()  # SHM stores BGR, copy to detach
 
     def collect_background(self, serial: str, timeout: float = 15.0,
                            bg_frames: int = BG_COLLECTION_FRAMES) -> bool:
@@ -163,8 +150,7 @@ class ProcessingEngine:
             if frame is None:
                 time.sleep(0.01)
                 continue
-            if not self.is_corrupt(frame):
-                collected.append(frame)
+            collected.append(frame)
         if not collected:
             logger.error(f"{serial}: Failed to collect background")
             return False
@@ -391,8 +377,6 @@ class ProcessingEngine:
         )
 
         # 6. Create TactileProcessor
-        from .tactile_processor import TactileProcessor  # noqa
-
         self._processors[serial] = TactileProcessor(
             model_path=model_path if enable_depth else None,
             enable_depth=enable_depth,

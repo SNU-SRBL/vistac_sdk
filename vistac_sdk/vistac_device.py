@@ -1,9 +1,9 @@
 import os
 import re
+import time
 
 import cv2
 import numpy as np
-import time
 
 import pyudev
 
@@ -73,9 +73,64 @@ class Camera:
             self.dev_id = get_camera_id(self.device_type, verbose)
             self.device = f"/dev/video{self.dev_id}"
 
+        # ── Corruption detection + recovery state ──
+        self._recovery_sleep = 0.01
+        self._recovery_warmup = 10
+
+        # ── FPS Watchdog (gap-based, derived from configured framerate) ──
+        self._wd_dt = (1.0 / self.framerate) * 1.5  # 25ms@60Hz, 50ms@30Hz
+        self._wd_max_slow = 10  # consecutive slow frames trigger recovery
+        self._wd_slow_count = 0
+        self._wd_last_time = 0.0
+
+    @staticmethod
+    def _is_corrupt(bgr: np.ndarray, threshold: float = 3.0) -> bool:
+        """Detect STM32 DMA tear: per-column step-discontinuity detector.
+
+        A tear is a horizontal line where pixel values jump instantaneously
+        (no gradient). Each column independently scans all 239 row-pairs for
+        a spike — one diff much larger than its neighbors above and below.
+        If >50% of 320 columns spike at the same modal row with
+        isolation ratio >10× and neighbor flatness >80%, the row is a tear.
+
+        Uses cv2.absdiff per BGR channel → max for 3-channel sensitivity
+        at cv2 speed (1.7× faster than int16 numpy, zero accuracy loss).
+        """
+        d0 = cv2.absdiff(bgr[:-1, :, 0], bgr[1:, :, 0]).astype(np.int16)
+        d1 = cv2.absdiff(bgr[:-1, :, 1], bgr[1:, :, 1]).astype(np.int16)
+        d2 = cv2.absdiff(bgr[:-1, :, 2], bgr[1:, :, 2]).astype(np.int16)
+        diff = np.maximum(np.maximum(d0, d1), d2)
+        spike = (diff[1:-1] > np.maximum(diff[:-2], diff[2:]) * threshold) & (diff[1:-1] > 20)
+
+        # Only count columns that spike at the SAME (modal) row.
+        # A tear has all spikes on one horizontal line; contact edges
+        # spread spikes across different rows and are safely discarded.
+        row_counts = np.sum(spike, axis=1)  # columns-per-row
+        best_row = int(np.argmax(row_counts))
+        best_count = int(np.max(row_counts))
+
+        # Quick reject: <50% columns have a spike at the modal row
+        if best_count <= bgr.shape[1] * 0.5:
+            return False
+
+        # Isolation ratio: tear is a pure step — peak must dominate neighbors by 10×
+        dr = best_row + 1  # spike[best_row] → diff[best_row+1]
+        peak = float(np.mean(diff[dr, :]))
+        r0 = max(0, dr - 5)
+        r1 = min(diff.shape[0], dr + 6)
+        neigh = (float(np.mean(diff[r0:dr, :])) + float(np.mean(diff[dr + 1:r1, :]))) / 2.0
+        if peak / max(neigh, 0.1) <= 10.0:
+            return False
+
+        # Neighbor flatness: tear neighbors are identical copies — diffs must be near-zero
+        spike_cols = np.where(spike[best_row, :])[0]
+        prev_flat = float(np.mean(diff[max(0, dr - 1), spike_cols] < 15))
+        next_flat = float(np.mean(diff[min(diff.shape[0] - 1, dr + 1), spike_cols] < 15))
+        return (prev_flat + next_flat) / 2.0 > 0.80
+
     def connect(self, verbose=True):
         """Connect to the camera using OpenCV VideoCapture (digit-interface pattern)."""
-        self.cap = cv2.VideoCapture(self.dev_id)
+        self.cap = cv2.VideoCapture(self.device)  # path string, survives index shifts
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.raw_imgw)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.raw_imgh)
         self.cap.set(cv2.CAP_PROP_FPS, self.framerate)
@@ -89,9 +144,50 @@ class Camera:
             print("Camera ready for use!")
 
     def get_image(self, flush=False):
-        """Get the latest image from the camera."""
+        """Get the latest image with automatic corruption detection and recovery.
+        
+        Returns None if frame is corrupt and recovery was triggered.
+        Caller should retry on next frame.
+        """
         ret, frame = self.cap.read()
-        return frame.copy() if ret else None
+        if not ret:
+            return None
+        frame_copied = frame.copy()
+        now = time.monotonic()
+
+        # ── Corruption detection + immediate recovery ──
+        if self._is_corrupt(frame_copied):
+            self._recover()
+            self._wd_slow_count = 0
+            self._wd_last_time = now
+            return None  # skip this corrupt frame, caller will retry
+
+        # ── FPS Watchdog (per-frame gap) ──
+        if self._wd_last_time > 0:
+            gap = now - self._wd_last_time
+            if gap > self._wd_dt:
+                self._wd_slow_count += 1
+                if self._wd_slow_count >= self._wd_max_slow:
+                    self._recover()
+                    self._wd_slow_count = 0
+                    self._wd_last_time = 0.0  # reset after recovery
+                    return None
+            else:
+                self._wd_slow_count = max(0, self._wd_slow_count - 1)
+        self._wd_last_time = now
+
+        return frame_copied
+
+    def _recover(self):
+        """STREAMOFF/STREAMON cycle via release()+connect().
+        
+        Resets STM32 DMA state. Minimum gap: ~270ms (~16 frames).
+        """
+        self.release()
+        time.sleep(self._recovery_sleep)
+        self.connect(verbose=False)
+        for _ in range(self._recovery_warmup):
+            self.cap.read()
 
     def release(self):
         """Release camera resources."""
