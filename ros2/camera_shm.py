@@ -38,6 +38,19 @@ from digit_sdk.camera import Camera
 SHM_HEADER = 32  # bytes before pixel data
 
 
+def _parse_affinity(spec: str):
+    """Parse affinity string like '0-3' or '0,2,4' into set of ints."""
+    cores = set()
+    for part in spec.split(','):
+        part = part.strip()
+        if '-' in part:
+            lo, hi = part.split('-', 1)
+            cores.update(range(int(lo), int(hi) + 1))
+        else:
+            cores.add(int(part))
+    return cores
+
+
 def shm_size_for(camera: Camera) -> int:
     """Compute SHM block size from camera resolution."""
     return SHM_HEADER + camera.raw_imgh * camera.raw_imgw * 3
@@ -123,12 +136,14 @@ def main():
                         help='Path to sensors config directory')
     parser.add_argument('--verbose', action='store_true',
                         help='Verbose output')
-    parser.add_argument('--cpu-core', type=int, default=-1,
-                        help='Pin process to CPU core (-1 = no pin)')
+    parser.add_argument('--cpu-affinity', type=str, default='',
+                        help='CPU core affinity (e.g. "0-3" or "0,2,4")')
     args = parser.parse_args()
 
-    if args.cpu_core >= 0:
-        os.sched_setaffinity(0, {args.cpu_core})
+    if args.cpu_affinity:
+        cores = _parse_affinity(args.cpu_affinity)
+        if cores:
+            os.sched_setaffinity(0, cores)
 
     try:
         run(serial=args.serial, sensors_root=args.sensors_root,

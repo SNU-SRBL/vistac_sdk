@@ -4,6 +4,7 @@
 One process per sensor — independent Python GIL for each camera.
 Launched by multi_sensor_tactile_streamer.launch.py with serial:=... param.
 """
+import os
 import time
 from multiprocessing import shared_memory
 
@@ -34,15 +35,23 @@ class RawPublisher(Node):
 
         self.declare_parameter('serial', value='')
         self.declare_parameter('rate', 60.0)
-        self.declare_parameter('cpu_core', -1)
+        self.declare_parameter('cpu_affinity', '')
 
         serial = self.get_parameter('serial').value
         rate = self.get_parameter('rate').value
-        cpu_core = self.get_parameter('cpu_core').value
+        cpu_affinity = self.get_parameter('cpu_affinity').value
 
-        if cpu_core >= 0:
-            import os
-            os.sched_setaffinity(0, {cpu_core})
+        if cpu_affinity:
+            cores = set()
+            for part in cpu_affinity.split(','):
+                part = part.strip()
+                if '-' in part:
+                    lo, hi = part.split('-', 1)
+                    cores.update(range(int(lo), int(hi) + 1))
+                else:
+                    cores.add(int(part))
+            if cores:
+                os.sched_setaffinity(0, cores)
 
         if not serial:
             self.get_logger().error('No serial parameter — nothing to do')
@@ -61,7 +70,6 @@ class RawPublisher(Node):
             self.get_logger().error(f'SHM not found for {serial} — exiting')
             return
 
-        self._last_seq = -1
         self._serial = serial
 
         # Publisher
@@ -81,11 +89,6 @@ class RawPublisher(Node):
 
         if not buf[24]:
             return
-
-        seq = int.from_bytes(buf[0:8], 'little')
-        if seq == self._last_seq:
-            return
-        self._last_seq = seq
 
         h = int.from_bytes(buf[16:20], 'little')
         w = int.from_bytes(buf[20:24], 'little')

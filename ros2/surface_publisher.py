@@ -9,6 +9,7 @@ Topics:
   /tactile/{serial}/pointcloud  — sensor_msgs/PointCloud2
 """
 
+import os
 import struct
 import time
 from multiprocessing import shared_memory
@@ -37,9 +38,23 @@ class SurfacePublisher(Node):
 
         self.declare_parameter('serial', value='')
         self.declare_parameter('rate', 60.0)
+        self.declare_parameter('cpu_affinity', '')
 
         serial = self.get_parameter('serial').value
         rate = self.get_parameter('rate').value
+        cpu_affinity = self.get_parameter('cpu_affinity').value
+
+        if cpu_affinity:
+            cores = set()
+            for part in cpu_affinity.split(','):
+                part = part.strip()
+                if '-' in part:
+                    lo, hi = part.split('-', 1)
+                    cores.update(range(int(lo), int(hi) + 1))
+                else:
+                    cores.add(int(part))
+            if cores:
+                os.sched_setaffinity(0, cores)
 
         if not serial:
             self.get_logger().error('No serial parameter — nothing to do')
@@ -59,7 +74,6 @@ class SurfacePublisher(Node):
                 f'Surface SHM not found for {serial} — exiting')
             return
 
-        self._last_seq = -1
         self._serial = serial
 
         # Publishers
@@ -81,11 +95,6 @@ class SurfacePublisher(Node):
 
         if not buf[28]:
             return
-
-        seq = struct.unpack_from('<Q', buf, 0)[0]
-        if seq == self._last_seq:
-            return
-        self._last_seq = seq
 
         h, w, pc_count = struct.unpack_from('<III', buf, 16)
         if h == 0 or w == 0:

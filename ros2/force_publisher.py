@@ -10,6 +10,7 @@ Topics:
   /tactile/{serial}/force_vector     — geometry_msgs/WrenchStamped
 """
 
+import os
 import struct
 import time
 from multiprocessing import shared_memory
@@ -41,9 +42,23 @@ class ForcePublisher(Node):
 
         self.declare_parameter('serial', value='')
         self.declare_parameter('rate', 30.0)
+        self.declare_parameter('cpu_affinity', '')
 
         serial = self.get_parameter('serial').value
         rate = self.get_parameter('rate').value
+        cpu_affinity = self.get_parameter('cpu_affinity').value
+
+        if cpu_affinity:
+            cores = set()
+            for part in cpu_affinity.split(','):
+                part = part.strip()
+                if '-' in part:
+                    lo, hi = part.split('-', 1)
+                    cores.update(range(int(lo), int(hi) + 1))
+                else:
+                    cores.add(int(part))
+            if cores:
+                os.sched_setaffinity(0, cores)
 
         if not serial:
             self.get_logger().error('No serial parameter — nothing to do')
@@ -63,7 +78,6 @@ class ForcePublisher(Node):
                 f'Force SHM not found for {serial} — exiting')
             return
 
-        self._last_seq = -1
         self._serial = serial
 
         # Publishers
@@ -87,11 +101,6 @@ class ForcePublisher(Node):
 
         if not buf[36]:
             return
-
-        seq = struct.unpack_from('<Q', buf, 0)[0]
-        if seq == self._last_seq:
-            return
-        self._last_seq = seq
 
         h, w = struct.unpack_from('<II', buf, 16)
         fx, fy, fz = struct.unpack_from('<fff', buf, 24)
