@@ -185,6 +185,7 @@ class PipelineNode(Node):
 
         # ---- Per-sensor timers ----
         self._sensor_timers: Dict[str, object] = {}
+        self._last_frames: Dict[str, np.ndarray] = {}
         for serial in active_sensors:
             cbg = ReentrantCallbackGroup()
             self._sensor_timers[serial] = self.create_timer(
@@ -202,13 +203,21 @@ class PipelineNode(Node):
     # ------------------------------------------------------------------
 
     def _handle_sensor(self, serial: str):
-        """Submit frame to worker, get result, write SHM, publish gradient."""
+        """Submit frame to worker, get result, canonicalize, write SHM."""
         bgr = self._engine.read_frame(serial)
         if bgr is not None:
+            self._last_frames[serial] = bgr
             self._engine.submit_frame(serial, bgr)
 
         result = self._engine.get_latest_result(serial)
         if result:
+            # Canonicalize force field (clip+scale, recompute colors)
+            self._engine.canonicalize_force_field(
+                result,
+                frame=self._last_frames.get(serial),
+                serial=serial,
+            )
+
             # Write to SHM for surface/force publishers
             self._write_surface_shm(serial, result)
             if serial in self._force_shms:

@@ -247,17 +247,16 @@ class ProcessingEngine:
         except (KeyError, TypeError, ValueError):
             return result
 
-        normal_vis = np.clip(normal_arr, 0.0, 1.0)
-        shear_vis = np.clip(shear_arr, -1.0, 1.0)
+        normal_vis = normal_arr.astype(np.float64)
+        shear_vis = shear_arr.astype(np.float64)
 
         if self._force_field_scale != 1.0:
             s = float(self._force_field_scale)
-            normal_vis = (normal_vis.astype(np.float64) * s).astype(
-                np.float32
-            )
-            shear_vis = (shear_vis.astype(np.float64) * s).astype(
-                np.float32
-            )
+            normal_vis = normal_vis * s
+            shear_vis = shear_vis * s
+
+        normal_vis = np.clip(normal_vis, 0.0, 1.0).astype(np.float32)
+        shear_vis = np.clip(shear_vis, -1.0, 1.0).astype(np.float32)
 
         ff["normal"] = normal_vis
         ff["shear"] = shear_vis
