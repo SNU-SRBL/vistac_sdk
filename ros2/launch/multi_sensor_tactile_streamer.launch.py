@@ -1,11 +1,26 @@
 import os
 import subprocess
+from typing import List
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction, ExecuteProcess
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_prefix
+
+# Centralised CPU affinity from system_config.yaml (fallback to defaults)
+try:
+    from core.config.config_mapper import map_tactile_cpu_affinity
+except ImportError:
+    map_tactile_cpu_affinity = None
+
+
+_DEFAULT_TACTILE_AFFINITY = {
+    "camera_shm": [0, 1, 2, 3],
+    "raw_publisher": [4, 5, 10, 11],
+    "surface_publisher": [8, 9],
+    "force_publisher": [8, 9],
+}
 
 '''
 This launch file starts camera, raw, pipeline, and publisher nodes for each
@@ -28,6 +43,45 @@ ros2 launch digit_sdk multi_sensor_tactile_streamer.launch.py mode:=pointcloud m
 ros2 launch digit_sdk multi_sensor_tactile_streamer.launch.py enable_force:=true mode:=force_vector
 ros2 launch digit_sdk multi_sensor_tactile_streamer.launch.py outputs:=depth,force_field,force_vector
 '''
+
+
+def _list_to_affinity_string(cores: List[int]) -> str:
+    """Convert a list of core indices to a compact string for ``os.sched_setaffinity``.
+
+    Examples::
+        [4,5,10,11] -> "4-5,10-11"
+        [4,5]       -> "4-5"
+        [2]         -> "2"
+        [8,9]       -> "8-9"
+    """
+    if not cores:
+        return ""
+    sorted_cores = sorted(set(cores))
+    parts = []
+    start = sorted_cores[0]
+    end = start
+    for c in sorted_cores[1:]:
+        if c == end + 1:
+            end = c
+        else:
+            parts.append(f"{start}-{end}" if start != end else str(start))
+            start = c
+            end = c
+    parts.append(f"{start}-{end}" if start != end else str(start))
+    return ",".join(parts)
+
+
+def _get_tactile_affinity() -> dict:
+    """Read tactile CPU affinity from central config, falling back to defaults."""
+    ca = None
+    if map_tactile_cpu_affinity is not None:
+        try:
+            ca = map_tactile_cpu_affinity()
+        except Exception:
+            pass
+    if ca:
+        return ca
+    return dict(_DEFAULT_TACTILE_AFFINITY)
 
 
 def launch_setup(context, *args, **kwargs):
@@ -84,12 +138,26 @@ def launch_setup(context, *args, **kwargs):
 
     nodes = []
 
+    # Read CPU affinity from central config (or fallback defaults)
+    affinity = _get_tactile_affinity()
+    aff_camera = affinity.get("camera_shm", [0, 1, 2, 3])
+    aff_raw = _list_to_affinity_string(
+        affinity.get("raw_publisher", [4, 5, 10, 11])
+    )
+    aff_surface = _list_to_affinity_string(
+        affinity.get("surface_publisher", [8, 9])
+    )
+    aff_force = _list_to_affinity_string(
+        affinity.get("force_publisher", [8, 9])
+    )
+
     # --- CAMERA PROCESSES (plain Python, no rclpy) ---
     for i, serial in enumerate(sensors):
+        cpu_affinity = str(aff_camera[i]) if i < len(aff_camera) else str(i)
         nodes.append(ExecuteProcess(
             cmd=[camera_shm_exe, '--serial', serial,
                  '--sensors-root', sensors_root,
-                 '--cpu-affinity', str(i)],
+                 '--cpu-affinity', cpu_affinity],
             name=f"camera_{serial}",
             output="screen",
         ))
@@ -133,7 +201,7 @@ def launch_setup(context, *args, **kwargs):
             name=f"raw_pub_{serial}",
             output="screen",
             parameters=[{"serial": serial, "rate": rate,
-                         "cpu_affinity": "4-5,10-11"}],
+                         "cpu_affinity": aff_raw}],
         ))
 
     # --- SURFACE PUBLISHERS (one per sensor, own GIL) ---
@@ -144,7 +212,7 @@ def launch_setup(context, *args, **kwargs):
             name=f"surface_pub_{serial}",
             output="screen",
             parameters=[{"serial": serial, "rate": rate,
-                         "cpu_affinity": "8-9"}],
+                         "cpu_affinity": aff_surface}],
         ))
 
     # --- FORCE PUBLISHERS (one per sensor, only if force enabled) ---
@@ -156,7 +224,7 @@ def launch_setup(context, *args, **kwargs):
                 name=f"force_pub_{serial}",
                 output="screen",
                 parameters=[{"serial": serial, "rate": 30.0,
-                             "cpu_affinity": "8-9"}],
+                             "cpu_affinity": aff_force}],
             ))
 
     return nodes
