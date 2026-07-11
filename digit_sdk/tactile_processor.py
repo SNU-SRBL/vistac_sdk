@@ -10,8 +10,8 @@ from typing import Dict, List, Optional, Union
 
 import numpy as np
 
-from .digit_reconstruct import DepthEstimator
-from .digit_force import ForceEstimator
+from .depth_estimator import DepthEstimator
+from .force_estimator import ForceEstimator
 
 
 class TactileProcessor:

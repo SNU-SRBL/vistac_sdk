@@ -13,25 +13,40 @@ find_package(rclpy REQUIRED)
 # Install Python modules
 ament_python_install_package(${PROJECT_NAME})
 
-# Install Python executables (camera_shm + process_node)
+# Install Python executables (camera_shm, pipeline_node, publishers)
 # camera_shm: plain Python, writes to SharedMemory (no rclpy)
-# process_node: rclpy publisher, ProcessingEngine in-process (no rclpy dependency in processing layer)
+# pipeline_node: rclpy, ProcessingEngine in-process, writes SHM output
+# raw_publisher: rclpy, publishes raw frames from SHM
+# surface_publisher: rclpy, publishes depth + pointcloud from SHM
+# force_publisher: rclpy, publishes force_field + force_vector from SHM
 install(PROGRAMS
-  ros2/camera_node.py
+  ros2/camera_shm.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME camera_shm
 )
 
 install(PROGRAMS
-  ros2/process_node.py
+  ros2/pipeline_node.py
   DESTINATION lib/${PROJECT_NAME}
-  RENAME process_node
+  RENAME pipeline_node
 )
 
 install(PROGRAMS
-  ros2/raw_bridge_node.py
+  ros2/raw_publisher.py
   DESTINATION lib/${PROJECT_NAME}
-  RENAME raw_bridge_node
+  RENAME raw_publisher
+)
+
+install(PROGRAMS
+  ros2/surface_publisher.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME surface_publisher
+)
+
+install(PROGRAMS
+  ros2/force_publisher.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME force_publisher
 )
 
 # Install launch files

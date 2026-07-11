@@ -33,7 +33,7 @@ from multiprocessing import shared_memory
 import cv2
 import numpy as np
 
-from digit_sdk.digit_device import Camera
+from digit_sdk.camera import Camera
 
 SHM_HEADER = 32  # bytes before pixel data
 

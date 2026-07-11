@@ -2,7 +2,7 @@ import pytest
 import numpy as np
 import torch
 from scipy import fftpack
-from digit_sdk.digit_reconstruct import _dct2, _idct2
+from digit_sdk.depth_estimator import _dct2, _idct2
 
 
 @pytest.mark.timeout(10)

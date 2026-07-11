@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Raw bridge: reads SHM, publishes /tactile/{serial}/raw over DDS.
+"""Raw publisher: reads SHM, publishes /tactile/{serial}/raw over DDS.
 
 One process per sensor — independent Python GIL for each camera.
 Launched by multi_sensor_tactile_streamer.launch.py with serial:=... param.
@@ -23,14 +23,14 @@ _BE_QOS = QoSProfile(
 SHM_HEADER = 32
 
 
-class RawBridgeNode(Node):
+class RawPublisher(Node):
     """Reads a single sensor's SHM block, publishes BGR raw frames over DDS.
 
     One instance per camera — no GIL contention with other sensors.
     """
 
     def __init__(self):
-        super().__init__('raw_bridge_node')
+        super().__init__('raw_publisher')
 
         self.declare_parameter('serial', value='')
         self.declare_parameter('rate', 60.0)
@@ -71,7 +71,7 @@ class RawBridgeNode(Node):
         # Single timer — one sensor, no GIL contention
         self._timer = self.create_timer(1.0 / rate, self._handle_sensor)
 
-        self.get_logger().info(f'Raw bridge ready for {serial} @ {rate:.0f}Hz')
+        self.get_logger().info(f'Raw publisher ready for {serial} @ {rate:.0f}Hz')
 
     def _handle_sensor(self):
         """Read latest frame from SHM, publish as BGR Image."""
@@ -116,7 +116,7 @@ class RawBridgeNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = RawBridgeNode()
+    node = RawPublisher()
     executor = SingleThreadedExecutor()
     executor.add_node(node)
     try:

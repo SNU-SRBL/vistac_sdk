@@ -23,7 +23,7 @@ if PROJECT_ROOT in sys.path:
     sys.path.remove(PROJECT_ROOT)
 sys.path.insert(0, PROJECT_ROOT)
 
-from digit_sdk.digit_device import Camera
+from digit_sdk.camera import Camera
 from digit_sdk.tactile_processor import TactileProcessor
 from digit_sdk.utils import load_config
 from digit_sdk.viz_utils import force_field_to_rgb, visualize_force_field, visualize_force_vector

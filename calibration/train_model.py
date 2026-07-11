@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 
 from calibration.utils import load_csv_as_dict
 from calibration.dataset import BGRXYDataset
-from digit_sdk.digit_reconstruct import BGRXYMLPNet
+from digit_sdk.depth_estimator import BGRXYMLPNet
 
 """
 This script trains the gradient prediction network.

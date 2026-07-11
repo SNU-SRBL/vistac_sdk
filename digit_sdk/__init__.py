@@ -25,11 +25,11 @@ __version__ = "1.0.0"
 # Low-level processors
 from .tactile_processor import TactileProcessor
 from .processing_engine import ProcessingEngine
-from .digit_reconstruct import DepthEstimator
-from .digit_force import ForceEstimator
+from .depth_estimator import DepthEstimator
+from .force_estimator import ForceEstimator
 
 # Device interface
-from .digit_device import Camera
+from .camera import Camera
 
 # Utilities
 from .temporal_buffer import TemporalBuffer

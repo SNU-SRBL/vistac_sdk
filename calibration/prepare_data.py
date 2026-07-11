@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 
 from calibration.utils import load_csv_as_dict
-from digit_sdk.digit_reconstruct import image2bgrxys
+from digit_sdk.depth_estimator import image2bgrxys
 from digit_sdk.utils import load_config
 
 """

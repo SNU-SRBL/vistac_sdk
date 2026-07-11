@@ -17,7 +17,7 @@ import argparse
 import os
 import cv2
 import numpy as np
-from digit_sdk.digit_device import Camera
+from digit_sdk.camera import Camera
 from digit_sdk.utils import load_config
 
 DEFAULT_SENSORS_ROOT = os.path.join(os.path.dirname(__file__), "../sensors")

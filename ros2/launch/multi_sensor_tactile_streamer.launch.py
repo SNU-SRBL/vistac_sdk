@@ -8,19 +8,19 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_prefix
 
 '''
-This launch file starts camera, raw_bridge, and depth nodes for each
-DIGIT sensor. Three node types per sensor set:
+This launch file starts camera, raw, pipeline, and publisher nodes for each
+DIGIT sensor. Five node types per sensor set:
   1. camera_shm: reads DIGIT at 60Hz, writes BGR frames to SharedMemory
      (plain Python, no rclpy)
-  2. raw_bridge_node: reads SHM, publishes /tactile/{serial}/raw on DDS
+  2. raw_publisher: reads camera SHM, publishes /tactile/{serial}/raw on DDS
      (rclpy, dedicated process, no depth model)
-  3. process_node: reads SHM, runs depth/force, publishes
-     depth/pc/force (rclpy, ProcessingEngine in-process)
+  3. pipeline_node: reads camera SHM, runs depth/force GPU pipeline,
+     writes surface/force SHM, publishes gradient inline
+  4. surface_publisher: reads surface SHM, publishes depth + pointcloud
+  5. force_publisher (if enable_force=true): reads force SHM, publishes force
 
-camera_shm is a plain Python process (NO rclpy/DDS) — it writes RGB frames
-+ metadata to SharedMemory. raw_bridge_node publishes raw frames to ROS
-topics; process_node handles depth/force computation. Separating raw into
-its own node removes the 230KB/frame DDS bottleneck from depth processing.
+Surface/force publishers have their own GIL, avoiding Fast-DDS publish blocking
+that limited depth to ~30 Hz in the single-process architecture.
 
 Usage Examples:
 ros2 launch digit_sdk multi_sensor_tactile_streamer.launch.py mode:=depth
@@ -32,13 +32,8 @@ ros2 launch digit_sdk multi_sensor_tactile_streamer.launch.py outputs:=depth,for
 
 def launch_setup(context, *args, **kwargs):
     # ── Pre-launch cleanup: kill stale processes, clear SHM ──
-    # SIGINT (-2) lets rclpy shutdown cleanly and FastRTPS clean up SHM.
-    # Do NOT use pkill -9 (SIGKILL) — corrupts DDS SHM.
-    # Do NOT use plain pkill (SIGTERM) — ROS2 nodes need SIGINT for rclpy.
-    # /dev/shm/tactile_* is our app SHM (unrelated to DDS); cleanup stays.
-    # /dev/shm/fastdds* is DDS SHM safety net for crash recovery.
     subprocess.run(
-        "pkill -2 -f 'camera_shm|process_node|raw_bridge' 2>/dev/null; "
+        "pkill -2 -f 'camera_shm|pipeline_node|raw_publisher|surface_publisher|force_publisher' 2>/dev/null; "
         "rm -f /dev/shm/tactile_* /dev/shm/fastdds* 2>/dev/null; "
         "sleep 1",
         shell=True, timeout=5)
@@ -58,7 +53,6 @@ def launch_setup(context, *args, **kwargs):
     outputs = [s.strip()
                for s in outputs_str.split(',')] if outputs_str else []
 
-    # Depth-specific parameters
     refine_mask = LaunchConfiguration(
         'refine_mask').perform(context) == 'true'
     relative = LaunchConfiguration('relative').perform(context) == 'true'
@@ -73,7 +67,7 @@ def launch_setup(context, *args, **kwargs):
     point_sample_mm = float(LaunchConfiguration(
         'point_sample_mm').perform(context))
 
-    # Auto-discover sensors from sensors_root directory
+    # Auto-discover sensors
     sensors = []
     if os.path.exists(sensors_root):
         for item in os.listdir(sensors_root):
@@ -82,17 +76,16 @@ def launch_setup(context, *args, **kwargs):
             if os.path.isdir(sensor_path) and os.path.exists(config_file):
                 sensors.append(item)
 
-    # Fallback to hardcoded list
     if not sensors:
         sensors = ["D21275", "D21273", "D21242", "D21119"]
 
-    # Path to executables
     pkg_prefix = get_package_prefix('digit_sdk')
     camera_shm_exe = os.path.join(pkg_prefix, 'lib', 'digit_sdk', 'camera_shm')
 
     nodes = []
+
+    # --- CAMERA PROCESSES (plain Python, no rclpy) ---
     for i, serial in enumerate(sensors):
-        # --- CAMERA PROCESS (plain Python, no rclpy) ---
         nodes.append(ExecuteProcess(
             cmd=[camera_shm_exe, '--serial', serial,
                  '--sensors-root', sensors_root,
@@ -101,8 +94,8 @@ def launch_setup(context, *args, **kwargs):
             output="screen",
         ))
 
-    # --- PUBLISHER NODE (rclpy, ProcessingEngine in-process) ---
-    process_params = {
+    # --- PIPELINE NODE (rclpy, ProcessingEngine in-process, SHM writer) ---
+    pipeline_params = {
         "serials": sensors,
         "sensors_root": sensors_root,
         "mode": mode,
@@ -112,7 +105,6 @@ def launch_setup(context, *args, **kwargs):
         "refine_mask": refine_mask,
         "relative": relative,
         "relative_scale": 1.0,
-        "mask_only_pointcloud": mask_only_pointcloud,
         "color_dist_threshold": 15,
         "height_threshold": height_threshold,
         "rate": rate,
@@ -123,31 +115,51 @@ def launch_setup(context, *args, **kwargs):
         "point_sample_mm": point_sample_mm,
     }
     if outputs:
-        process_params["outputs"] = outputs
+        pipeline_params["outputs"] = outputs
 
     nodes.append(Node(
         package="digit_sdk",
-        executable="process_node",
-        name="tactile_process_node",
+        executable="pipeline_node",
+        name="pipeline_node",
         output="screen",
-        parameters=[process_params],
+        parameters=[pipeline_params],
     ))
 
-    # --- RAW BRIDGE NODES (one per sensor — independent GIL) ---
+    # --- RAW PUBLISHERS (one per sensor) ---
     for i, serial in enumerate(sensors):
         nodes.append(Node(
             package="digit_sdk",
-            executable="raw_bridge_node",
-            name=f"raw_bridge_{serial}",
+            executable="raw_publisher",
+            name=f"raw_pub_{serial}",
             output="screen",
             parameters=[{"serial": serial, "rate": rate, "cpu_core": i + 4}],
         ))
+
+    # --- SURFACE PUBLISHERS (one per sensor, own GIL) ---
+    for serial in sensors:
+        nodes.append(Node(
+            package="digit_sdk",
+            executable="surface_publisher",
+            name=f"surface_pub_{serial}",
+            output="screen",
+            parameters=[{"serial": serial, "rate": rate}],
+        ))
+
+    # --- FORCE PUBLISHERS (one per sensor, only if force enabled) ---
+    if enable_force:
+        for serial in sensors:
+            nodes.append(Node(
+                package="digit_sdk",
+                executable="force_publisher",
+                name=f"force_pub_{serial}",
+                output="screen",
+                parameters=[{"serial": serial, "rate": 30.0}],
+            ))
 
     return nodes
 
 
 def generate_launch_description():
-    # Resolve sensors_root for both source and install trees.
     _launch_dir = os.path.dirname(os.path.abspath(__file__))
     _src_path = os.path.abspath(
         os.path.join(_launch_dir, '..', '..', 'sensors'))
