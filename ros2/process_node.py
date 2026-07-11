@@ -143,6 +143,9 @@ class TactileProcessNode(Node):
         for serial in active_sensors:
             self._engine.collect_background(serial)
 
+        # Start async worker threads (decoupled from timer)
+        self._engine.start_workers()
+
         # ---- Publishers (BestEffort QoS) ----
         self.output_publishers: Dict[str, dict] = {}
         for serial in active_sensors:
@@ -195,17 +198,17 @@ class TactileProcessNode(Node):
             f'({", ".join(active_sensors)}) on {model_device}')
 
     # ------------------------------------------------------------------
-    # Timer callback
+    # Timer callback — async worker pattern
     # ------------------------------------------------------------------
 
     def _handle_sensor(self, serial: str):
-        """Read frame from engine, feed processor, publish results.
-        Raw frames are published by raw_bridge_node."""
+        """Submit frame to worker, poll latest result, publish.
+        Worker thread processes GPU asynchronously."""
         bgr = self._engine.read_frame(serial)
         if bgr is not None:
-            self._engine.feed_frame(serial, bgr)
+            self._engine.submit_frame(serial, bgr)
 
-        result = self._engine.get_result(serial)
+        result = self._engine.get_latest_result(serial)
         if result:
             header = Header()
             header.stamp = self.get_clock().now().to_msg()

@@ -2,38 +2,40 @@
 ProcessingEngine: pure-Python tactile sensor processing pipeline.
 
 Reads raw frames from shared memory (written by camera_shm), runs
-corruption detection, background collection, TactileProcessor
-(depth / force estimation), and makes results available.
-
-Zero ROS / rclpy dependencies — usable standalone or from a thin
-ROS publisher wrapper.
+background collection, and processes depth/force asynchronously via
+worker threads.  One worker thread per sensor decouples GPU processing
+from the ROS publish loop, so tail GPU latency never blocks the timer.
 
 Typical usage::
 
     engine = ProcessingEngine(
-        serials=["D21275", "D21273"],
+        serials=["D21275"],
         sensors_root="/path/to/sensors",
         model_device="cuda",
-        outputs=["depth", "pointcloud"],
-        ...
+        outputs=["depth"],
     )
+    engine.collect_background("D21275")
+    engine.start_workers()
 
-    # Poll in a loop:
-    for serial in engine.serials:
-        frame = engine.read_frame(serial)
-        if frame is not None:
-            engine.feed_frame(serial, frame)
-    results = engine.get_results()
+    # In timer callback:
+    frame = engine.read_frame("D21275")
+    if frame is not None:
+        engine.submit_frame("D21275", frame)
+    result = engine.get_latest_result("D21275")
+    if result:
+        publish(result)
 """
 
 import logging
 import pathlib
+import threading
 import time
 from multiprocessing import shared_memory
 from typing import Dict, List, Optional
 
 import cv2
 import numpy as np
+import torch
 
 from .tactile_processor import TactileProcessor
 from .utils import load_config
@@ -45,8 +47,9 @@ BG_COLLECTION_FRAMES = 10
 
 
 class ProcessingEngine:
-    """Manages SHM reading, corruption filtering, and TactileProcessor
-    for a set of tactile sensors. No ROS dependencies."""
+    """Manages SHM reading, background collection, and asynchronous
+    depth/force processing via worker threads.  Decouples GPU processing
+    from the publish loop."""
 
     def __init__(
         self,
@@ -92,9 +95,17 @@ class ProcessingEngine:
         self._shms: Dict[str, shared_memory.SharedMemory] = {}
         self._last_seqs: Dict[str, int] = {}
         self._processors: Dict[str, TactileProcessor] = {}
-        self._bg_dones: Dict[str, bool] = {}
         self._ppmm: Dict[str, float] = {}
+        self._streams: Dict[str, torch.cuda.Stream] = {}
+
+        # Worker thread state
+        self._running = False
+        self._worker_threads: Dict[str, threading.Thread] = {}
+        self._lock = threading.Lock()
         self._latest_results: Dict[str, dict] = {}
+        self._queued_frames: Dict[str, Optional[np.ndarray]] = {}
+        self._queued_seqs: Dict[str, int] = {}
+        self._processed_seqs: Dict[str, int] = {}
 
         # Connect to each sensor and initialize
         for serial in self._serials:
@@ -129,15 +140,17 @@ class ProcessingEngine:
         h = int.from_bytes(buf[16:20], "little")
         w = int.from_bytes(buf[20:24], "little")
         if h == 0 or w == 0:
-            return None  # SHM not fully written yet
-        bgr = np.frombuffer(buf[32:32 + h * w * 3], dtype=np.uint8).reshape(h, w, 3)
-        return bgr.copy()  # SHM stores BGR, copy to detach
+            return None
+        bgr = np.frombuffer(
+            buf[32:32 + h * w * 3], dtype=np.uint8).reshape(h, w, 3)
+        return bgr.copy()
 
     def collect_background(self, serial: str, timeout: float = 15.0,
                            bg_frames: int = BG_COLLECTION_FRAMES) -> bool:
-        """Sequentially collect clean background frames for *serial*.
-        Frames are corruption-checked; only clean ones are kept.
-        Returns True if background was collected successfully."""
+        """Collect background frames for *serial* from SHM and load them
+        into the TactileProcessor.  Call *before* start_workers().
+
+        Returns True on success."""
         collected: List[np.ndarray] = []
         deadline = time.monotonic() + timeout
         while len(collected) < bg_frames:
@@ -155,50 +168,66 @@ class ProcessingEngine:
             logger.error(f"{serial}: Failed to collect background")
             return False
         bg_image = np.mean(collected, axis=0).astype(np.uint8)
-        processor = self._processors[serial]
-        processor.load_background(bg_image)
-        processor.start_thread(
-            outputs=self._outputs,
-            ppmm=self._ppmm.get(serial, 0.0),
-            **self._depth_kwargs,
-        )
-        self._bg_dones[serial] = True
+        self._processors[serial].load_background(bg_image)
         logger.info(
             f"{serial}: Background collected "
             f"({len(collected)} clean frames)")
         return True
 
-    def feed_frame(self, serial: str, frame: np.ndarray,
-                   timestamp: Optional[float] = None) -> None:
-        """Feed a clean BGR frame to the processor for *serial*.
-        *timestamp* defaults to ``time.time()``."""
+    def start_workers(self) -> None:
+        """Start one worker thread per active sensor.
+        Workers process frames asynchronously via processor.process().
+        GPU work is queued on per-sensor CUDA streams for concurrency."""
+        with self._lock:
+            if self._running:
+                return
+            self._running = True
+            for serial in self._serials:
+                if serial not in self._processors:
+                    continue
+                self._queued_frames[serial] = None
+                self._queued_seqs[serial] = 0
+                self._processed_seqs[serial] = 0
+                self._latest_results[serial] = {}
+                t = threading.Thread(
+                    target=self._worker_loop,
+                    args=(serial,),
+                    daemon=True,
+                    name=f"engine-{serial}",
+                )
+                self._worker_threads[serial] = t
+                t.start()
+        logger.info(f"Started {len(self._worker_threads)} worker threads")
+
+    def submit_frame(self, serial: str, frame: np.ndarray) -> None:
+        """Submit a frame for asynchronous processing.
+        Non-blocking — the worker thread picks it up."""
+        with self._lock:
+            self._queued_frames[serial] = frame
+            self._queued_seqs[serial] += 1
+
+    def get_latest_result(self, serial: str) -> Optional[dict]:
+        """Return the latest processed result for *serial*, or None.
+        Non-blocking."""
+        with self._lock:
+            result = self._latest_results.get(serial)
+        return result if result else None
+
+    def process_frame_sync(self, serial: str, frame: np.ndarray) -> dict:
+        """Process a single frame synchronously (bypasses worker threads).
+        Returns dict with processed outputs, or empty dict on failure."""
         processor = self._processors.get(serial)
         if processor is None:
-            return
-        if timestamp is None:
-            timestamp = time.time()
-        processor.set_input_frame(frame, timestamp)
-
-    def get_results(self) -> Dict[str, dict]:
-        """Poll all processors for latest results.
-        Returns dict mapping serial → result dict (may be empty)."""
-        results: Dict[str, dict] = {}
-        for serial in self._serials:
-            proc = self._processors.get(serial)
-            if proc is None:
-                continue
-            res = proc.get_latest_result()
-            if res:
-                results[serial] = res
-        return results
-
-    def get_result(self, serial: str) -> Optional[dict]:
-        """Get latest result for a single *serial*, or None."""
-        proc = self._processors.get(serial)
-        if proc is None:
-            return None
-        res = proc.get_latest_result()
-        return res if res else None
+            return {}
+        stream = self._streams.get(serial)
+        with torch.cuda.stream(stream):
+            result = processor.process(
+                image=frame,
+                outputs=self._outputs,
+                ppmm=self._ppmm.get(serial, 0.0),
+                **self._depth_kwargs,
+            )
+        return result if result else {}
 
     def canonicalize_force_field(
         self,
@@ -302,14 +331,14 @@ class ProcessingEngine:
         return result
 
     def shutdown(self) -> None:
-        """Stop all processor threads and close SHM handles."""
-        for serial in self._serials:
-            proc = self._processors.get(serial)
-            if proc is not None:
-                proc.stop_thread()
-            shm = self._shms.get(serial)
-            if shm is not None:
-                shm.close()
+        """Stop all worker threads and close SHM handles."""
+        with self._lock:
+            self._running = False
+        for t in self._worker_threads.values():
+            t.join(timeout=2.0)
+        self._worker_threads.clear()
+        for shm in self._shms.values():
+            shm.close()
         self._processors.clear()
         self._shms.clear()
 
@@ -320,63 +349,86 @@ class ProcessingEngine:
         self.shutdown()
 
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Internal
     # ------------------------------------------------------------------
 
+    def _worker_loop(self, serial: str) -> None:
+        """Background processing loop for one sensor.
+        Waits for new frames, processes via processor.process(),
+        stores results for get_latest_result()."""
+        processor = self._processors[serial]
+        stream = self._streams.get(serial)
+        outputs = self._outputs
+        ppmm = self._ppmm.get(serial, 0.0)
+        depth_kwargs = self._depth_kwargs.copy()
+
+        while True:
+            with self._lock:
+                if not self._running:
+                    break
+                frame = self._queued_frames.get(serial)
+                qseq = self._queued_seqs.get(serial, 0)
+                pseq = self._processed_seqs.get(serial, 0)
+            if frame is not None and qseq > pseq:
+                try:
+                    with torch.cuda.stream(stream):
+                        result = processor.process(
+                            image=frame,
+                            outputs=outputs,
+                            ppmm=ppmm,
+                            **depth_kwargs,
+                        )
+                    with self._lock:
+                        if result:
+                            self._latest_results[serial] = result
+                        self._processed_seqs[serial] = qseq
+                except Exception:
+                    logger.warning(
+                        f"{serial}: Worker processing error",
+                        exc_info=True,
+                    )
+            else:
+                time.sleep(0.001)
+
     def _connect_sensor(self, serial: str, root: pathlib.Path) -> None:
-        """Connect to SHM, load config, create TactileProcessor for *serial*."""
-        # 1. Connect to shared memory (retry up to 10s)
+        """Connect to SHM, load config, create TactileProcessor."""
         shm_name = f"tactile_{serial}"
         shm = None
         for _ in range(100):
             try:
                 shm = shared_memory.SharedMemory(
-                    name=shm_name, create=False
-                )
+                    name=shm_name, create=False)
                 break
             except FileNotFoundError:
                 time.sleep(0.1)
         if shm is None:
-            logger.error(
-                f"Shared memory '{shm_name}' not found after 10s "
-                f"for {serial} — skipping"
-            )
+            logger.error(f"SHM '{shm_name}' not found after 10s -- skipping")
             return
         self._shms[serial] = shm
         self._last_seqs[serial] = -1
 
-        # 2. Load sensor config
+        # Config
         config_path = str(root / serial / f"{serial}.yaml")
         config = load_config(config_path=config_path)
         ppmm = config.get("ppmm", 0.0)
         self._ppmm[serial] = ppmm
 
-        # 3. Resolve model paths
+        # Model paths
         model_path = str(root / serial / "model" / "nnmodel.pth")
         force_encoder_path = str(
-            root.parent / "models"
-            / "sparsh_dino_base_encoder.ckpt"
-        )
+            root.parent / "models" / "sparsh_dino_base_encoder.ckpt")
         force_decoder_path = str(
-            root.parent / "models"
-            / "sparsh_digit_forcefield_decoder.pth"
-        )
+            root.parent / "models" / "sparsh_digit_forcefield_decoder.pth")
 
-        # 4. Read force config
         force_cfg = config.get("force", {}) or {}
         force_vector_scale_cfg = force_cfg.get(
-            "force_vector_scale", [1.0, 1.0, 1.0]
-        )
+            "force_vector_scale", [1.0, 1.0, 1.0])
 
-        # 5. Determine which features are needed (always needed now)
         depth_outputs = {"depth", "gradient", "pointcloud", "mask"}
         force_outputs = {"force_field", "force_vector"}
         enable_depth = any(o in depth_outputs for o in self._outputs)
-        enable_force_est = any(
-            o in force_outputs for o in self._outputs
-        )
+        enable_force_est = any(o in force_outputs for o in self._outputs)
 
-        # 6. Create TactileProcessor
         self._processors[serial] = TactileProcessor(
             model_path=model_path if enable_depth else None,
             enable_depth=enable_depth,
@@ -392,9 +444,8 @@ class ProcessingEngine:
             force_vector_scale=force_vector_scale_cfg,
         )
 
-        # 7. Background state
-        self._bg_dones[serial] = False
         logger.info(f"Sensor {serial} initialized")
+        self._streams[serial] = torch.cuda.Stream()
 
     def __repr__(self) -> str:
         return (

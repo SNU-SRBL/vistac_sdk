@@ -177,17 +177,17 @@ def run_live_viewer(
         "height_threshold": height_threshold,
     }
     processor.load_background(bg_image)
-    processor.start_thread(outputs=outputs, ppmm=ppmm, **depth_kwargs)
     print("Background collected. Starting viewer...")
 
     def get_output():
-        """Get latest camera frame and processor result (replaces old get_latest_output)."""
+        """Get latest camera frame and processor result via direct sync call."""
         frame = camera.get_image()
         if frame is None:
             return None, {}
         ts = time.time()
-        processor.set_input_frame(frame, ts)
-        result = processor.get_latest_result()
+        result = processor.process(
+            image=frame, outputs=outputs, ppmm=ppmm,
+            timestamp=ts, **depth_kwargs)
         # Canonicalize force_field (same as process_node._canonicalize_force_field)
         if result and "force_field" in result and result["force_field"] is not None:
             ff = result["force_field"]
@@ -303,7 +303,6 @@ def run_live_viewer(
             if key != -1:
                 break
 
-        processor.stop_thread()
         camera.release()
         cv2.destroyAllWindows()
         return
@@ -328,7 +327,6 @@ def run_live_viewer(
             key = cv2.waitKey(1)
             if key != -1:
                 break
-        processor.stop_thread()
         camera.release()
         cv2.destroyAllWindows()
 
@@ -355,7 +353,6 @@ def run_live_viewer(
             key = cv2.waitKey(1)
             if key != -1:
                 break
-        processor.stop_thread()
         camera.release()
         cv2.destroyAllWindows()
 
@@ -386,7 +383,6 @@ def run_live_viewer(
         gui.Application.instance.post_to_main_thread(app.window, update_loop)
         print("\nClose the window to quit.\n")
         gui.Application.instance.run()
-        processor.stop_thread()
         camera.release()
         gui.Application.instance.quit()
 
@@ -437,7 +433,6 @@ def run_live_viewer(
         gui.Application.instance.post_to_main_thread(app.window, update_loop_force)
         print("\nClose the window to quit.\n")
         gui.Application.instance.run()
-        processor.stop_thread()
         camera.release()
         gui.Application.instance.quit()
 
@@ -469,7 +464,6 @@ def run_live_viewer(
             key = cv2.waitKey(1)
             if key != -1:
                 break
-        processor.stop_thread()
         camera.release()
         cv2.destroyAllWindows()
 
@@ -505,7 +499,6 @@ def run_live_viewer(
             key = cv2.waitKey(1)
             if key != -1:
                 break
-        processor.stop_thread()
         camera.release()
         cv2.destroyAllWindows()
 
