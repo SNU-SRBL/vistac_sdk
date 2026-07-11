@@ -15,7 +15,7 @@ from sensor_msgs.msg import Image
 import numpy as np
 
 _BE_QOS = QoSProfile(
-    depth=1,
+    depth=10,
     reliability=ReliabilityPolicy.BEST_EFFORT,
     durability=DurabilityPolicy.VOLATILE,
 )

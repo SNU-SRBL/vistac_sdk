@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
 """Process node: reads raw SHM, runs ProcessingEngine in-process, publishes ROS.
 
-ProcessingEngine handles SHM reading, corruption filter, background collection,
-and TactileProcessor management — all pure Python, no ROS.
-
-This node reads frames from SHM, feeds the frame to the engine's processor,
-polls results, and publishes depth/pc/force.
-
-Raw frames are published by a separate raw_bridge_node which reads the same
-SHM blocks independently.
+ProcessingEngine handles SHM reading, background collection,
+and TactileProcessor management via async worker threads.
+Worker threads own GPU processing; timer callbacks never block on GPU.
 
 Topics (published per serial):
   /tactile/{serial}/depth       — Image (mono8)
@@ -30,7 +25,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 # BestEffort QoS — fire-and-forget, no ACK/retransmission overhead
 _BE_QOS = QoSProfile(
-    depth=1,
+    depth=10,
     reliability=ReliabilityPolicy.BEST_EFFORT,
     durability=DurabilityPolicy.VOLATILE,
 )
@@ -112,8 +107,6 @@ class TactileProcessNode(Node):
             }
             outputs = mode_map.get(mode, ['depth'])
 
-        # ---- ProcessingEngine (in-process, pure Python) ----
-        self.get_logger().info('Creating ProcessingEngine...')
         self._engine = ProcessingEngine(
             serials=self._serials,
             sensors_root=sensors_root,
@@ -138,15 +131,11 @@ class TactileProcessNode(Node):
             self.get_logger().fatal('No sensors initialized')
             raise RuntimeError('No sensors initialized')
 
-        # Sequential background collection
-        self.get_logger().info('Collecting backgrounds...')
         for serial in active_sensors:
             self._engine.collect_background(serial)
-
-        # Start async worker threads (decoupled from timer)
         self._engine.start_workers()
 
-        # ---- Publishers (BestEffort QoS) ----
+        # Publishers
         self.output_publishers: Dict[str, dict] = {}
         for serial in active_sensors:
             base_topic = f'tactile/{serial}'
@@ -183,7 +172,7 @@ class TactileProcessNode(Node):
                         self.create_publisher(
                             Image, f'{base_topic}/raw', _BE_QOS)
 
-        # ---- Per-sensor timers (parallel via ReentrantCallbackGroup + MultiThreadedExecutor) ----
+        # Per-sensor timers
         self._sensor_timers: Dict[str, object] = {}
         for serial in active_sensors:
             cbg = ReentrantCallbackGroup()
@@ -197,17 +186,10 @@ class TactileProcessNode(Node):
             f'Process node ready for {len(active_sensors)} sensors '
             f'({", ".join(active_sensors)}) on {model_device}')
 
-    # ------------------------------------------------------------------
-    # Timer callback — async worker pattern
-    # ------------------------------------------------------------------
-
     def _handle_sensor(self, serial: str):
-        """Submit frame to worker, poll latest result, publish.
-        Worker thread processes GPU asynchronously."""
         bgr = self._engine.read_frame(serial)
         if bgr is not None:
             self._engine.submit_frame(serial, bgr)
-
         result = self._engine.get_latest_result(serial)
         if result:
             header = Header()
@@ -215,13 +197,8 @@ class TactileProcessNode(Node):
             header.frame_id = f'tactile_{serial}'
             self._publish_results(serial, result, header)
 
-    # ------------------------------------------------------------------
-    # Result publishing
-    # ------------------------------------------------------------------
-
     def _publish_results(
             self, serial: str, result: dict, header: Header):
-        """Publish all results for one sensor."""
         pubs = self.output_publishers.get(serial, {})
         for output_name, pub_data in result.items():
             if output_name not in pubs:
@@ -229,32 +206,24 @@ class TactileProcessNode(Node):
             publisher = pubs[output_name]
             if pub_data is None:
                 continue
-
             if output_name == 'depth':
                 if len(pub_data.shape) == 2:
-                    msg = self._cv2_to_imgmsg(
-                        pub_data, encoding='mono8')
+                    msg = self._cv2_to_imgmsg(pub_data, encoding='mono8')
                     msg.header = header
                     publisher.publish(msg)
-
             elif output_name == 'gradient':
-                if (len(pub_data.shape) == 3
-                        and pub_data.shape[2] == 2):
+                if len(pub_data.shape) == 3 and pub_data.shape[2] == 2:
                     msg = self._cv2_to_imgmsg(
-                        pub_data.astype(np.float32),
-                        encoding='32FC2')
+                        pub_data.astype(np.float32), encoding='32FC2')
                     msg.header = header
                     publisher.publish(msg)
-
             elif output_name == 'pointcloud':
                 colors = result.get('pointcloud_colors')
                 forces = result.get('pointcloud_forces')
                 msg = self.create_pointcloud2_msg(
-                    pub_data, header,
-                    colors=colors, forces=forces)
+                    pub_data, header, colors=colors, forces=forces)
                 if msg is not None:
                     publisher.publish(msg)
-
             elif output_name == 'force_field':
                 if isinstance(pub_data, dict):
                     normal = pub_data.get('normal')
@@ -270,7 +239,6 @@ class TactileProcessNode(Node):
                             force_rgb, encoding='32FC3')
                         msg.header = header
                         publisher.publish(msg)
-
                         viz_pub = pubs.get('force_field_viz')
                         if viz_pub is not None:
                             from digit_sdk.viz_utils import \
@@ -280,26 +248,17 @@ class TactileProcessNode(Node):
                                 rgb8, encoding='rgb8')
                             viz_msg.header = header
                             viz_pub.publish(viz_msg)
-
             elif output_name == 'force_vector':
                 if isinstance(pub_data, dict):
                     msg = WrenchStamped()
                     msg.header = header
-                    msg.wrench.force.x = float(
-                        pub_data.get('fx', 0.0))
-                    msg.wrench.force.y = float(
-                        pub_data.get('fy', 0.0))
-                    msg.wrench.force.z = float(
-                        pub_data.get('fz', 0.0))
+                    msg.wrench.force.x = float(pub_data.get('fx', 0.0))
+                    msg.wrench.force.y = float(pub_data.get('fy', 0.0))
+                    msg.wrench.force.z = float(pub_data.get('fz', 0.0))
                     publisher.publish(msg)
-
-    # ------------------------------------------------------------------
-    # Message conversion helpers
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _cv2_to_imgmsg(arr: np.ndarray, encoding: str) -> Image:
-        """numpy -> ROS Image message."""
         msg = Image()
         if arr.ndim == 2:
             msg.height, msg.width = arr.shape
@@ -314,11 +273,7 @@ class TactileProcessNode(Node):
 
     @staticmethod
     def create_pointcloud2_msg(
-            points: np.ndarray, header: Header,
-            colors: np.ndarray = None,
-            forces: np.ndarray = None) -> PointCloud2:
-        """Create PointCloud2 from point array with optional color/force."""
-        import struct as _struct
+            points, header, colors=None, forces=None):
         if points is None or len(points) == 0:
             return None
         pts = points.astype(np.float32)
@@ -346,13 +301,11 @@ class TactileProcessNode(Node):
                 name='force', offset=offset,
                 datatype=PointField.FLOAT32, count=3))
             offset += 12
-
         data_list = [pts.tobytes()]
         if has_rgb:
             data_list.append(rgb_f32.tobytes())
         if has_f:
             data_list.append(f_f32.tobytes())
-
         msg = PointCloud2()
         msg.header = header
         msg.height = 1
@@ -364,10 +317,6 @@ class TactileProcessNode(Node):
         msg.is_dense = True
         msg.data = b''.join(data_list)
         return msg
-
-    # ------------------------------------------------------------------
-    # Cleanup
-    # ------------------------------------------------------------------
 
     def destroy_node(self):
         self._engine.shutdown()
