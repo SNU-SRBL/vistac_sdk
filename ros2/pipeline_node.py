@@ -14,7 +14,6 @@ Publishes inline (DDS):
 """
 
 import struct
-import time
 from multiprocessing import shared_memory
 from typing import Dict
 
@@ -25,6 +24,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.parameter import Parameter
 from rcl_interfaces.msg import ParameterDescriptor, ParameterType
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from rclpy.time import Time
 
 _BE_QOS = QoSProfile(
     depth=10,
@@ -186,6 +186,7 @@ class PipelineNode(Node):
         # ---- Per-sensor timers ----
         self._sensor_timers: Dict[str, object] = {}
         self._last_frames: Dict[str, np.ndarray] = {}
+        self._last_timestamps: Dict[str, int] = {}
         for serial in active_sensors:
             cbg = ReentrantCallbackGroup()
             self._sensor_timers[serial] = self.create_timer(
@@ -207,6 +208,8 @@ class PipelineNode(Node):
         bgr = self._engine.read_frame(serial)
         if bgr is not None:
             self._last_frames[serial] = bgr
+            ts = self._engine.get_frame_timestamp(serial)
+            self._last_timestamps[serial] = ts
             self._engine.submit_frame(serial, bgr)
 
         result = self._engine.get_latest_result(serial)
@@ -225,7 +228,9 @@ class PipelineNode(Node):
 
             # Publish gradient inline (lower rate, fine to block)
             header = Header()
-            header.stamp = self.get_clock().now().to_msg()
+            ts_ns = self._last_timestamps.get(serial, 0)
+            stamp = Time(nanoseconds=ts_ns).to_msg() if ts_ns else self.get_clock().now().to_msg()
+            header.stamp = stamp
             header.frame_id = f'tactile_{serial}'
             self._publish_gradient(serial, result, header)
 
@@ -253,7 +258,7 @@ class PipelineNode(Node):
         # Write header
         buf[28] = 0  # valid=0
         seq = self._surface_seqs.get(serial, 0) + 1
-        ts = time.time_ns()
+        ts = self._last_timestamps.get(serial, 0)
         struct.pack_into('<QQIIIB', buf, 0, seq, ts, h, w, pc_count, 0)
 
         # Write depth data
@@ -290,7 +295,7 @@ class PipelineNode(Node):
 
         buf[36] = 0  # valid=0
         seq = self._force_seqs.get(serial, 0) + 1
-        ts = time.time_ns()
+        ts = self._last_timestamps.get(serial, 0)
         struct.pack_into('<QQIIfffB', buf, 0, seq, ts, h, w, fx, fy, fz, 0)
 
         offset = SHM_FORCE_HEADER  # 40

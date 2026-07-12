@@ -12,6 +12,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from rclpy.time import Time
 from sensor_msgs.msg import Image
 import numpy as np
 
@@ -108,7 +109,9 @@ class RawPublisher(Node):
         msg.step = w * 3
         msg.data = bgr.tobytes()
         msg.header.frame_id = f'tactile_{self._serial}'
-        msg.header.stamp = self.get_clock().now().to_msg()
+        ts_ns = int.from_bytes(buf[8:16], 'little')
+        stamp = Time(nanoseconds=ts_ns).to_msg() if ts_ns else self.get_clock().now().to_msg()
+        msg.header.stamp = stamp
         self._pub.publish(msg)
 
     def destroy_node(self):

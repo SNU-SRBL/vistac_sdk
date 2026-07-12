@@ -19,6 +19,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from rclpy.time import Time
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import WrenchStamped
 import numpy as np
@@ -117,7 +118,8 @@ class ForcePublisher(Node):
         shear_y = np.frombuffer(buf[offset:offset + h * w * 4],
                                 dtype=np.float32).reshape(h, w)
 
-        header = self.get_clock().now().to_msg()
+        ts_ns = int.from_bytes(buf[8:16], 'little')
+        header = Time(nanoseconds=ts_ns).to_msg() if ts_ns else self.get_clock().now().to_msg()
         frame = f'tactile_{self._serial}'
 
         # Force field: pack normal+shear into 32FC3

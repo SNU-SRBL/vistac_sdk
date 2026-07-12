@@ -106,7 +106,7 @@ def run(serial: str, sensors_root: str, verbose: bool = False):
         # Store BGR directly (raw_bridge needs BGR, processing_engine expects BGR)
         bgr = frame
         h, w = bgr.shape[:2]
-        ts_ns = time.monotonic_ns()
+        ts_ns = time.time_ns()
 
         # Write: valid=0, metadata, data, seq++, valid=1
         buf[24] = 0
