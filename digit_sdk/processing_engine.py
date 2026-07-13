@@ -94,7 +94,6 @@ class ProcessingEngine:
         # Per-sensor state
         self._shms: Dict[str, shared_memory.SharedMemory] = {}
         self._last_seqs: Dict[str, int] = {}
-        self._frame_timestamps: Dict[str, int] = {}
         self._processors: Dict[str, TactileProcessor] = {}
         self._ppmm: Dict[str, float] = {}
         self._streams: Dict[str, torch.cuda.Stream] = {}
@@ -138,7 +137,6 @@ class ProcessingEngine:
         if seq == self._last_seqs.get(serial, -1):
             return None
         self._last_seqs[serial] = seq
-        self._frame_timestamps[serial] = int.from_bytes(buf[8:16], "little")
         h = int.from_bytes(buf[16:20], "little")
         w = int.from_bytes(buf[20:24], "little")
         if h == 0 or w == 0:
@@ -146,11 +144,6 @@ class ProcessingEngine:
         bgr = np.frombuffer(
             buf[32:32 + h * w * 3], dtype=np.uint8).reshape(h, w, 3)
         return bgr.copy()
-
-    def get_frame_timestamp(self, serial: str) -> int:
-        """Return the camera capture timestamp (epoch ns) for *serial*.
-        Returns 0 if no frame has been read yet."""
-        return self._frame_timestamps.get(serial, 0)
 
     def collect_background(self, serial: str, timeout: float = 15.0,
                            bg_frames: int = BG_COLLECTION_FRAMES) -> bool:

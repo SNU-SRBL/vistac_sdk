@@ -18,7 +18,6 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
-from rclpy.time import Time
 from sensor_msgs.msg import Image, PointCloud2, PointField
 import numpy as np
 
@@ -113,9 +112,7 @@ class SurfacePublisher(Node):
         depth_msg.step = w
         depth_msg.data = depth_data.tobytes()
         depth_msg.header.frame_id = f'tactile_{self._serial}'
-        ts_ns = int.from_bytes(buf[8:16], 'little')
-        stamp = Time(nanoseconds=ts_ns).to_msg() if ts_ns else self.get_clock().now().to_msg()
-        depth_msg.header.stamp = stamp
+        depth_msg.header.stamp = self.get_clock().now().to_msg()
         self._pub_depth.publish(depth_msg)
 
         # Pointcloud (if any)
