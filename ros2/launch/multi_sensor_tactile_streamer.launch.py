@@ -88,7 +88,9 @@ def launch_setup(context, *args, **kwargs):
     # ── Pre-launch cleanup: kill stale processes, clear SHM ──
     subprocess.run(
         "pkill -2 -f 'camera_shm|pipeline_node|raw_publisher|surface_publisher|force_publisher' 2>/dev/null; "
-        "rm -f /dev/shm/tactile_* /dev/shm/fastdds* 2>/dev/null; "
+        "rm -f /dev/shm/tactile_* 2>/dev/null; "
+        # DISABLED: rm /dev/shm/fastdds* breaks DDS discovery at scale (25+ participants, SHM port collision)
+        # "rm -f /dev/shm/fastdds* 2>/dev/null; "
         "sleep 1",
         shell=True, timeout=5)
 

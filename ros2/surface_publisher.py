@@ -60,19 +60,20 @@ class SurfacePublisher(Node):
             self.get_logger().error('No serial parameter — nothing to do')
             return
 
-        # Connect to SHM (retry up to 10s)
+        # Connect to SHM (retry indefinitely — pipeline may take 30s+ to init)
         self._shm = None
-        for _ in range(100):
+        attempt = 0
+        while self._shm is None:
             try:
                 self._shm = shared_memory.SharedMemory(
                     name=f'tactile_{serial}_surface', create=False)
-                break
             except FileNotFoundError:
+                attempt += 1
+                if attempt == 1 or attempt % 300 == 0:  # log every 30s
+                    self.get_logger().warn(
+                        f'Surface SHM not ready for {serial} '
+                        f'(retry {attempt}) — waiting for pipeline...')
                 time.sleep(0.1)
-        if self._shm is None:
-            self.get_logger().error(
-                f'Surface SHM not found for {serial} — exiting')
-            return
 
         self._serial = serial
 

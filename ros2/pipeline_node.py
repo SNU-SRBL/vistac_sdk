@@ -135,11 +135,11 @@ class PipelineNode(Node):
             self.get_logger().fatal('No sensors initialized')
             raise RuntimeError('No sensors initialized')
 
-        for serial in active_sensors:
-            self._engine.collect_background(serial)
-        self._engine.start_workers()
-
-        # ---- Initialize SHM segments ----
+        # ---- Initialize SHM segments (BEFORE background collection) ----
+        # Create SHM early so surface_publishers can connect immediately.
+        # Background collection can take 30+ seconds (timeout per sensor),
+        # and surface_publishers retry for only 10s — they'd exit before
+        # SHM exists if we create it after.
         self._surface_shms: Dict[str, shared_memory.SharedMemory] = {}
         self._surface_seqs: Dict[str, int] = {}
         self._force_shms: Dict[str, shared_memory.SharedMemory] = {}
@@ -175,6 +175,10 @@ class PipelineNode(Node):
                     name=f'tactile_{serial}_force', create=True,
                     size=SHM_FORCE_HEADER + 3 * 224 * 224 * 4)
                 self._force_seqs[serial] = 0
+
+        for serial in active_sensors:
+            self._engine.collect_background(serial)
+        self._engine.start_workers()
 
         # ---- Publishers (DDS) — only gradient stays inline ----
         self._grad_publishers: Dict[str, object] = {}
