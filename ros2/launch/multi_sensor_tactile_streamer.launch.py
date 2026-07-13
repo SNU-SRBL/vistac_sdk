@@ -1,5 +1,6 @@
 import os
 import subprocess
+import yaml
 from typing import List
 
 from launch import LaunchDescription
@@ -228,6 +229,34 @@ def launch_setup(context, *args, **kwargs):
                 parameters=[{"serial": serial, "rate": 30.0,
                              "cpu_affinity": aff_force}],
             ))
+
+    # --- DIGIT OPTICAL FRAME + BRIDGE (per sensor, from YAML) ---
+    for serial in sensors:
+        # Read optical frame params from per-sensor YAML
+        sensor_dir = os.path.join(sensors_root, serial)
+        sensor_yaml_path = os.path.join(sensor_dir, f"{serial}.yaml")
+        optical = {}
+        try:
+            with open(sensor_yaml_path) as f:
+                sensor_cfg = yaml.safe_load(f) or {}
+            optical = sensor_cfg.get("optical_frame", {})
+        except Exception:
+            pass
+
+        optical_rpy = [str(v) for v in optical.get("optical_rpy", [0.0, 0.0, 0.0])]
+        optical_xyz = [str(v) for v in optical.get("optical_xyz", [0.0, 0.0, 0.0])]
+
+        # Body → optical frame (from YAML)
+        nodes.append(Node(
+            package="tf2_ros",
+            executable="static_transform_publisher",
+            name=f"optical_{serial}",
+            output="log",
+            arguments=optical_xyz + optical_rpy + [
+                f"tactile_{serial}_base_link",
+                f"tactile_{serial}_optical_frame",
+            ],
+        ))
 
     return nodes
 

@@ -1,0 +1,33 @@
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+<xacro:macro name="digit_sensor"
+             params="serial">
+  <!-- DIGIT sensor body (realsense-style: mesh origin hardcoded, optical frame offset from driver YAML) -->
+  <link name="tactile_${serial}_base_link">
+    <visual>
+      <geometry>
+        <mesh filename="package://digit_sdk/urdf/meshes/digit.stl"
+              scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="black">
+        <color rgba="0.2 0.2 0.2 1"/>
+      </material>
+      <origin rpy="1.5708 0 1.5708" xyz="0 0 0"/>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="package://digit_sdk/urdf/meshes/digit.stl"
+              scale="0.001 0.001 0.001"/>
+      </geometry>
+      <origin rpy="1.5708 0 1.5708" xyz="0 0 0"/>
+    </collision>
+    <inertial>
+      <mass value="1.6654268e-02"/>
+      <inertia ixx="1.4702815e-06" ixy="0.0000000e+00" ixz="0.0000000e+00"
+               iyx="0.0000000e+00" iyy="3.8502616e-06" iyz="0.0000000e+00"
+               izx="0.0000000e+00" izy="0.0000000e+00" izz="3.8502616e-06"/>
+    </inertial>
+  </link>
+</xacro:macro>
+
+</robot>

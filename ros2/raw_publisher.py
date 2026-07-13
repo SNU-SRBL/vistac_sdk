@@ -107,7 +107,7 @@ class RawPublisher(Node):
         msg.is_bigendian = False
         msg.step = w * 3
         msg.data = bgr.tobytes()
-        msg.header.frame_id = f'tactile_{self._serial}'
+        msg.header.frame_id = f'tactile_{self._serial}_optical_frame'
         msg.header.stamp = self.get_clock().now().to_msg()
         self._pub.publish(msg)
 

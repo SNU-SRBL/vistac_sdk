@@ -112,7 +112,7 @@ class SurfacePublisher(Node):
         depth_msg.is_bigendian = False
         depth_msg.step = w
         depth_msg.data = depth_data.tobytes()
-        depth_msg.header.frame_id = f'tactile_{self._serial}'
+        depth_msg.header.frame_id = f'tactile_{self._serial}_optical_frame'
         depth_msg.header.stamp = self.get_clock().now().to_msg()
         self._pub_depth.publish(depth_msg)
 

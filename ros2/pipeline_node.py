@@ -230,7 +230,7 @@ class PipelineNode(Node):
             # Publish gradient inline (lower rate, fine to block)
             header = Header()
             header.stamp = self.get_clock().now().to_msg()
-            header.frame_id = f'tactile_{serial}'
+            header.frame_id = f'tactile_{serial}_optical_frame'
             self._publish_gradient(serial, result, header)
 
     # ------------------------------------------------------------------

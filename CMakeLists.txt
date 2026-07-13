@@ -55,6 +55,12 @@ install(DIRECTORY
   DESTINATION share/${PROJECT_NAME}/launch
 )
 
+# Install URDF and meshes (digit.xacro + digit.stl)
+install(DIRECTORY
+  ros2/urdf/
+  DESTINATION share/${PROJECT_NAME}/urdf
+)
+
 # Install other directories
 install(DIRECTORY
   sensors/
