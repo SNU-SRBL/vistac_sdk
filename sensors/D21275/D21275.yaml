@@ -17,7 +17,7 @@ optical_frame:
   optical_xyz: [0.0171, 0.0, 0.0176]
 # Force Estimation (Sparsh)
 force:
-  enabled: false
+  enable_force: false
   temporal_stride: 5
   encoder: sparsh-dino-base  # Required for decoder compatibility
   decoder: sparsh-digit-forcefield

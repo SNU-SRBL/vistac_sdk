@@ -422,11 +422,12 @@ class ProcessingEngine:
         force_cfg = config.get("force", {}) or {}
         force_vector_scale_cfg = force_cfg.get(
             "force_vector_scale", [1.0, 1.0, 1.0])
+        force_enabled_yaml = force_cfg.get("enable_force", False)
 
         depth_outputs = {"depth", "gradient", "pointcloud", "mask"}
         force_outputs = {"force_field", "force_vector"}
         enable_depth = any(o in depth_outputs for o in self._outputs)
-        enable_force_est = any(o in force_outputs for o in self._outputs)
+        enable_force_est = force_enabled_yaml or any(o in force_outputs for o in self._outputs)
 
         self._processors[serial] = TactileProcessor(
             model_path=model_path if enable_depth else None,
